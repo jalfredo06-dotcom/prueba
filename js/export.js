@@ -114,7 +114,7 @@
   async function backup(nb, entries) {
     const files = [], meta = [];
     for (const e of entries) {
-      const m = { type: e.type, created: e.created, tags: e.tags, note: e.note, coords: e.coords, stampCrs: e.stampCrs, stampOn: e.stampOn, title: e.title, bg: e.bg, strokes: e.strokes, w: e.w, h: e.h };
+      const m = { type: e.type, created: e.created, tags: e.tags, note: e.note, coords: e.coords, stampCrs: e.stampCrs, stampOn: e.stampOn, title: e.title, bg: e.bg, strokes: e.strokes, labels: e.labels, w: e.w, h: e.h };
       if (e.blob) { m.file = `media/${e.id}.jpg`; files.push({ name: m.file, data: await bytes(e.blob) }); }
       meta.push(m);
     }

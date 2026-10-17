@@ -1,4 +1,4 @@
-const CACHE = 'libreta-v1';
+const CACHE = 'libreta-v2';
 const ASSETS = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'js/geo.js', 'js/zip.js', 'js/pdf.js', 'js/db.js', 'js/render.js', 'js/export.js', 'js/app.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });

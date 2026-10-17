@@ -30,6 +30,7 @@
 
   function sheet(title, build, opts = {}) {
     const bg = el('div', { class: 'sheet-bg' });
+    if (document.querySelector('.full')) bg.style.zIndex = 60;
     const body = el('div', { class: 'sheet-b' }), foot = el('div', { class: 'sheet-f' });
     const api = { body, foot, close() { bg.remove(); opts.onClose && opts.onClose(); } };
     const sh = el('div', { class: 'sheet' + (opts.tall ? ' tall' : '') },
@@ -292,7 +293,18 @@
     const finish = () => bmp.close && bmp.close();
     sheet(isNew ? 'Nueva foto' : 'Foto', (api) => {
       api.body.style.padding = '0'; api.body.style.gap = '0';
-      const inner = el('div', { style: 'padding:14px;display:flex;flex-direction:column;gap:14px' }, metaPanel(entry, draw, { photo: true, isNew }));
+      const annotate = () => {
+        const W = 1000, H = Math.round(1000 * bmp.height / bmp.width);
+        annotator(entry, {
+          W, H, ink: () => 'photo', doneText: 'Listo',
+          render: (e, cv) => { const c = Render.photo(e, bmp, 1400); cv.width = c.width; cv.height = c.height; cv.getContext('2d').drawImage(c, 0, 0); },
+          onDone: (close) => { close(); draw(); }, onCancel: draw
+        });
+      };
+      view.style.cursor = 'pointer'; view.addEventListener('click', annotate);
+      const inner = el('div', { style: 'padding:14px;display:flex;flex-direction:column;gap:14px' },
+        el('button', { class: 'btn acc', text: '✏️ Dibujar y poner etiquetas sobre la foto', onclick: annotate }),
+        metaPanel(entry, draw, { photo: true, isNew }));
       api.body.append(prev, inner); draw();
       const save = async (again) => {
         try {
@@ -326,64 +338,176 @@
     } catch (err) { toast('No se pudo abrir la imagen', 3500); }
   }
 
+  /* ---------- anotaciones: trazos, etiquetas, deshacer/rehacer ---------- */
+  const SIZES = [{ n: 'S', v: 0.75 }, { n: 'M', v: 1 }, { n: 'L', v: 1.5 }];
+  function labelSheet(init, ok, del) {
+    let size = init.s || 1;
+    sheet(init.id ? 'Editar etiqueta' : 'Nueva etiqueta', (api) => {
+      const inp = el('input', { type: 'text', placeholder: 'Texto de la etiqueta…', maxlength: 40, enterkeyhint: 'done' });
+      inp.value = init.text || '';
+      const done = (t) => {
+        t = (t == null ? inp.value : t).trim();
+        if (!t) return toast('Escribe un texto');
+        api.close(); ok({ text: t, s: size });
+      };
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); done(); } });
+      const sizeSeg = el('div', { class: 'seg' });
+      const drawSeg = () => sizeSeg.replaceChildren(...SIZES.map(z => el('button', { type: 'button', class: size === z.v ? 'on' : '', text: z.n, onclick: () => { size = z.v; drawSeg(); } })));
+      drawSeg();
+      api.body.append(
+        el('div', { class: 'sec' }, el('h3', { text: init.id ? 'Texto' : 'Toca una etiqueta rápida o escribe una' }),
+          el('div', { class: 'chips' }, settings.tags.map(t => chip(t, false, () => init.id ? (inp.value = t) : done(t)))), inp),
+        el('div', { class: 'sec' }, el('h3', { text: 'Tamaño' }), sizeSeg));
+      if (del) api.foot.append(el('button', { class: 'btn danger', text: 'Borrar', onclick: () => { api.close(); del(); } }));
+      api.foot.append(el('button', { class: 'btn pri', text: init.id ? 'Aplicar' : 'Añadir etiqueta', onclick: () => done() }));
+      setTimeout(() => init.id && inp.focus(), 250);
+    });
+  }
+
+  /** Editor a pantalla completa. cfg: { W, H, ink(), render(entry, canvas), barExtra, extraTools, doneText, onDone(close), onCancel } */
+  function annotator(entry, cfg) {
+    entry.strokes = entry.strokes || []; entry.labels = entry.labels || [];
+    const { W, H } = cfg;
+    const st = { color: 0, size: 6, tool: 'pen', cur: null, sel: null, drag: null };
+    const undo = [], redo = [];
+    const snap = () => ({ strokes: [...entry.strokes], labels: entry.labels.map(l => ({ ...l })) });
+    const restore = (x) => { entry.strokes = [...x.strokes]; entry.labels = x.labels.map(l => ({ ...l })); if (!entry.labels.some(l => l.id === st.sel)) st.sel = null; };
+    const initial = snap();
+    const commit = () => { undo.push(snap()); if (undo.length > 150) undo.shift(); redo.length = 0; };
+    const cv = el('canvas'), stage = el('div', { class: 'stage' }, cv), root = el('div', { class: 'full' });
+    let raf = 0;
+    const redraw = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        Render.selected = st.sel;
+        cfg.render(st.cur ? { ...entry, strokes: [...entry.strokes, st.cur] } : entry, cv);
+        Render.selected = null; fit();
+      });
+    };
+    const fit = () => {
+      const r = stage.getBoundingClientRect(), k = Math.min((r.width - 16) / W, (r.height - 16) / H);
+      cv.style.width = Math.floor(W * k) + 'px'; cv.style.height = Math.floor(H * k) + 'px';
+    };
+    const pt = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; };
+    const hit = (x, y) => {
+      for (let i = entry.labels.length - 1; i >= 0; i--) {
+        const g = Render.labelGeom(entry.labels[i], W), pad = W / 60;
+        if (x >= g.x0 - pad && x <= g.x1 + pad && y >= g.y0 - pad && y <= g.y1 + pad) return entry.labels[i];
+      }
+      return null;
+    };
+    const close = () => { removeEventListener('resize', fit); removeEventListener('keydown', keys); cancelAnimationFrame(raf); root.remove(); };
+    const doUndo = () => { if (!undo.length) return; redo.push(snap()); restore(undo.pop()); drawTools(); redraw(); };
+    const doRedo = () => { if (!redo.length) return; undo.push(snap()); restore(redo.pop()); drawTools(); redraw(); };
+    const delSel = () => {
+      const l = entry.labels.find(x => x.id === st.sel);
+      if (!l) return toast('Elige 👆 y toca una etiqueta para borrarla. Para trazos usa 🧽 o 🧹.', 3500);
+      commit(); entry.labels = entry.labels.filter(x => x !== l); st.sel = null; drawTools(); redraw();
+    };
+    const clearAll = () => {
+      if (!entry.strokes.length && !entry.labels.length) return toast('No hay nada que borrar');
+      commit(); entry.strokes = []; entry.labels = []; st.sel = null; drawTools(); redraw(); toast('Todo borrado · ↶ para deshacer');
+    };
+    const editLabel = (l) => labelSheet(l, (r) => { commit(); Object.assign(l, r); redraw(); }, () => { commit(); entry.labels = entry.labels.filter(x => x !== l); st.sel = null; drawTools(); redraw(); });
+    const addLabel = () => labelSheet({ text: '', s: 1 }, (r) => {
+      commit();
+      const l = { id: Date.now() + Math.random(), x: W / 2, y: H * 0.42, text: r.text, s: r.s };
+      entry.labels.push(l); st.sel = l.id; st.tool = 'select'; drawTools(); redraw(); toast('Arrastra la etiqueta al punto que quieres señalar', 3500);
+    });
+    function keys(e) {
+      if (document.querySelector('.sheet-bg') || /INPUT|TEXTAREA/.test((e.target || {}).tagName)) return;
+      const z = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z', y = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y';
+      if (z && e.shiftKey || y) { e.preventDefault(); doRedo(); } else if (z) { e.preventDefault(); doUndo(); }
+      else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); delSel(); }
+    }
+    addEventListener('keydown', keys);
+
+    cv.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); cv.setPointerCapture(e.pointerId);
+      const [x, y] = pt(e);
+      if (st.tool === 'select') {
+        const l = hit(x, y), was = st.sel;
+        st.sel = l ? l.id : null;
+        st.drag = l ? { l, dx: x - l.x, dy: y - l.y, moved: false, wasSel: was === l.id } : null;
+        drawTools(); redraw(); return;
+      }
+      st.sel = null;
+      st.cur = { c: st.color, w: st.tool === 'erase' ? st.size * 3 : st.size, e: st.tool === 'erase', p: [Math.round(x), Math.round(y)] }; redraw();
+    });
+    cv.addEventListener('pointermove', (e) => {
+      if (st.drag) {
+        const [x, y] = pt(e), d = st.drag;
+        if (!d.moved) { if (Math.hypot(x - d.dx - d.l.x, y - d.dy - d.l.y) < 4) return; commit(); d.moved = true; }
+        d.l.x = Math.max(0, Math.min(W, x - d.dx)); d.l.y = Math.max(0, Math.min(H, y - d.dy)); redraw(); return;
+      }
+      if (!st.cur) return;
+      for (const ev of (e.getCoalescedEvents ? e.getCoalescedEvents() : [e])) {
+        const [x, y] = pt(ev), p = st.cur.p, n = p.length;
+        if (Math.hypot(x - p[n - 2], y - p[n - 1]) >= 2) p.push(Math.round(x), Math.round(y));
+      }
+      redraw();
+    });
+    const up = () => {
+      if (st.drag) { const d = st.drag; st.drag = null; if (!d.moved && d.wasSel) editLabel(d.l); drawTools(); return; }
+      if (st.cur) { commit(); entry.strokes.push(st.cur); st.cur = null; drawTools(); redraw(); }
+    };
+    cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+
+    const row1 = el('div', { class: 'tools' }), row2 = el('div', { class: 'tools spread' });
+    function drawTools() {
+      const ink = Render.INK[cfg.ink()];
+      const tb = (txt, on, fn, label, extra = '') => el('button', { class: 'tool' + (on ? ' on' : '') + extra, text: txt, 'aria-label': label, title: label, onclick: fn });
+      row1.replaceChildren(
+        ...ink.map((c, i) => el('button', { class: 'sw' + (st.tool === 'pen' && st.color === i ? ' on' : ''), style: `background:${c}`, 'aria-label': 'Color ' + (i + 1), onclick: () => { st.color = i; if (st.tool !== 'pen') st.tool = 'pen'; drawTools(); } })),
+        el('i', { class: 'sp' }),
+        ...[3, 6, 12].map(z => tb(z === 3 ? '·' : z === 6 ? '●' : '⬤', st.size === z, () => { st.size = z; drawTools(); }, 'Grosor')),
+        ...(cfg.extraTools ? cfg.extraTools(drawTools, redraw) : []));
+      row2.replaceChildren(
+        tb('✏️', st.tool === 'pen', () => { st.tool = 'pen'; drawTools(); }, 'Lápiz'),
+        tb('🧽', st.tool === 'erase', () => { st.tool = 'erase'; st.sel = null; drawTools(); redraw(); }, 'Borrador'),
+        tb('👆', st.tool === 'select', () => { st.tool = 'select'; drawTools(); }, 'Seleccionar y mover etiquetas'),
+        tb('🏷', false, addLabel, 'Añadir etiqueta'),
+        el('i', { class: 'sp' }),
+        tb('↶', false, doUndo, 'Deshacer', undo.length ? '' : ' dim'),
+        tb('↷', false, doRedo, 'Rehacer', redo.length ? '' : ' dim'),
+        tb('🗑', false, delSel, 'Borrar etiqueta seleccionada', st.sel ? '' : ' dim'),
+        tb('🧹', false, clearAll, 'Borrar todo'));
+    }
+    drawTools();
+    const cancel = () => {
+      if (undo.length && !confirm('¿Descartar los cambios hechos aquí?')) return;
+      restore(initial); close(); cfg.onCancel && cfg.onCancel();
+    };
+    root.append(
+      el('div', { class: 'bar' }, el('button', { class: 'ico', text: '✕', 'aria-label': 'Cerrar', onclick: cancel }), ...(cfg.barExtra || []),
+        el('button', { class: 'btn sm acc', text: cfg.doneText || 'Listo', onclick: () => cfg.onDone(close) })),
+      stage, row1, row2);
+    document.body.append(root); addEventListener('resize', fit); fit(); redraw();
+    return { redraw };
+  }
+
   /* ---------- pizarra ---------- */
   const BGS = ['chalk', 'paper', 'grid'], BG_NAMES = { chalk: 'Pizarra', paper: 'Hoja blanca', grid: 'Cuadrícula' };
   function editBoard(entry, isNew) {
-    entry.strokes = entry.strokes || []; entry.bg = entry.bg || 'chalk';
-    const st = { color: 0, size: 6, erase: false, cur: null };
-    const cv = el('canvas', { width: Render.BOARD_W, height: Render.BOARD_H });
-    const stage = el('div', { class: 'stage' }, cv);
+    entry.bg = entry.bg || 'chalk';
     const title = el('input', { type: 'text', placeholder: 'Título de la pizarra', maxlength: 38 }); title.value = entry.title || '';
-    title.addEventListener('input', () => { entry.title = title.value; redraw(); });
-    const root = el('div', { class: 'full' });
-    let raf = 0;
-    const redraw = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => Render.board(entry, cv, S.nb.name)); };
-    const fit = () => {
-      const r = stage.getBoundingClientRect(), k = Math.min((r.width - 16) / Render.BOARD_W, (r.height - 16) / Render.BOARD_H);
-      cv.style.width = Math.floor(Render.BOARD_W * k) + 'px'; cv.style.height = Math.floor(Render.BOARD_H * k) + 'px';
-    };
-    const close = () => { removeEventListener('resize', fit); root.remove(); };
-    const pt = (e) => { const r = cv.getBoundingClientRect(); return [Math.round((e.clientX - r.left) * Render.BOARD_W / r.width), Math.round((e.clientY - r.top) * Render.BOARD_H / r.height)]; };
-    cv.addEventListener('pointerdown', (e) => {
-      e.preventDefault(); cv.setPointerCapture(e.pointerId);
-      st.cur = { c: st.color, w: st.erase ? st.size * 3 : st.size, e: st.erase, p: pt(e) }; entry.strokes.push(st.cur); redraw();
+    let ann;
+    title.addEventListener('input', () => { entry.title = title.value; ann.redraw(); });
+    ann = annotator(entry, {
+      W: Render.BOARD_W, H: Render.BOARD_H, doneText: 'Guardar',
+      ink: () => entry.bg === 'chalk' ? 'chalk' : 'paper',
+      render: (e, cv) => Render.board(e, cv, S.nb.name),
+      barExtra: [title, el('button', { class: 'btn sm', text: '🏷 Datos', onclick: () => sheet('Etiquetas y coordenadas', (api) => {
+        api.body.append(metaPanel(entry, () => ann.redraw(), { isNew }));
+        if (!isNew) api.foot.append(el('button', { class: 'btn danger', text: 'Eliminar hoja', onclick: async () => { await delEntry(entry, api); document.querySelector('.full') && document.querySelector('.full').remove(); } }));
+        api.foot.append(el('button', { class: 'btn pri', text: 'Listo', onclick: () => api.close() }));
+      }) })],
+      extraTools: (drawTools, redraw) => [el('i', { class: 'sp' }), el('button', { class: 'tool', style: 'font-size:.8rem', text: BG_NAMES[entry.bg], onclick: () => { entry.bg = BGS[(BGS.indexOf(entry.bg) + 1) % BGS.length]; drawTools(); redraw(); } })],
+      onDone: async (close) => {
+        try { Render.selected = null; await saveEntry(entry, thumbOf(Render.board(entry, null, S.nb.name), 360)); close(); toast('Pizarra guardada ✓'); }
+        catch (err) { toast('No se pudo guardar: ' + err.message, 4000); }
+      }
     });
-    cv.addEventListener('pointermove', (e) => {
-      if (!st.cur) return;
-      for (const ev of (e.getCoalescedEvents ? e.getCoalescedEvents() : [e])) { const [x, y] = pt(ev), p = st.cur.p, n = p.length; if (Math.hypot(x - p[n - 2], y - p[n - 1]) >= 2) p.push(x, y); }
-      redraw();
-    });
-    const up = () => { st.cur = null; };
-    cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
-
-    const tools = el('div', { class: 'tools' });
-    const drawTools = () => {
-      const ink = Render.INK[entry.bg === 'chalk' ? 'chalk' : 'paper'];
-      tools.replaceChildren(
-        ...ink.map((c, i) => el('button', { class: 'sw' + (!st.erase && st.color === i ? ' on' : ''), style: `background:${c}`, 'aria-label': 'Color ' + (i + 1), onclick: () => { st.color = i; st.erase = false; drawTools(); } })),
-        el('i', { class: 'sp' }),
-        ...[3, 6, 12].map(s => el('button', { class: 'tool' + (st.size === s ? ' on' : ''), text: s === 3 ? '·' : s === 6 ? '●' : '⬤', onclick: () => { st.size = s; drawTools(); } })),
-        el('button', { class: 'tool' + (st.erase ? ' on' : ''), text: '🧽', 'aria-label': 'Borrador', onclick: () => { st.erase = !st.erase; drawTools(); } }),
-        el('button', { class: 'tool', text: '↶', 'aria-label': 'Deshacer', onclick: () => { entry.strokes.pop(); redraw(); } }),
-        el('button', { class: 'tool', text: '🗑', 'aria-label': 'Limpiar', onclick: () => { if (entry.strokes.length && confirm('¿Borrar todo lo dibujado?')) { entry.strokes = []; redraw(); } } }),
-        el('i', { class: 'sp' }),
-        el('button', { class: 'tool', text: BG_NAMES[entry.bg], style: 'font-size:.82rem', onclick: () => { entry.bg = BGS[(BGS.indexOf(entry.bg) + 1) % BGS.length]; st.color = 0; drawTools(); redraw(); } }));
-    };
-    drawTools();
-    const save = async () => {
-      try { await saveEntry(entry, thumbOf(Render.board(entry, null, S.nb.name), 360)); close(); toast('Pizarra guardada ✓'); }
-      catch (err) { toast('No se pudo guardar: ' + err.message, 4000); }
-    };
-    root.append(
-      el('div', { class: 'bar' }, el('button', { class: 'ico', text: '✕', 'aria-label': 'Cerrar', onclick: () => { if (!entry.strokes.length || confirm('¿Salir sin guardar?')) close(); } }), title,
-        el('button', { class: 'btn sm', text: '🏷 Datos', onclick: () => sheet('Etiquetas y coordenadas', (api) => {
-          api.body.append(metaPanel(entry, redraw, { isNew }));
-          if (!isNew) api.foot.append(el('button', { class: 'btn danger', text: 'Eliminar hoja', onclick: async () => { await delEntry(entry, api); close(); } }));
-          api.foot.append(el('button', { class: 'btn pri', text: 'Listo', onclick: () => api.close() }));
-        }) }),
-        el('button', { class: 'btn sm acc', text: 'Guardar', onclick: save })),
-      stage, tools);
-    document.body.append(root); addEventListener('resize', fit); fit(); redraw();
   }
 
   /* ---------- menú de libreta ---------- */

@@ -87,7 +87,7 @@ details summary{cursor:pointer;font-weight:600;font-size:.88rem}
 .check input{width:22px;height:22px;accent-color:var(--forest)}
 
 /* Pizarra */
-.full{position:fixed;inset:0;z-index:25;background:#101a15;display:flex;flex-direction:column}
+.full{position:fixed;inset:0;z-index:40;background:#101a15;display:flex;flex-direction:column}
 .full .bar{display:flex;gap:8px;align-items:center;padding:max(8px,env(safe-area-inset-top)) 10px 8px;background:var(--forest);color:#f6f1e4}
 .full .bar input{background:rgba(255,255,255,.12);border:0;color:#fff;flex:1}
 .full .bar input::placeholder{color:rgba(255,255,255,.55)}
@@ -104,3 +104,11 @@ details summary{cursor:pointer;font-weight:600;font-size:.88rem}
 
 .full .bar .btn{background:rgba(255,255,255,.16);color:#fff;border-color:transparent}
 .full .bar .btn.acc{background:var(--accent)}
+
+.tools.spread{justify-content:space-between;padding-top:0}
+.tools.spread .tool{flex:1;min-width:0;padding:0}
+.tool.dim{opacity:.35}
+.tools .sw{flex:none}
+.full .tools{background:var(--forest)}
+.full .tools+.tools{padding-top:0}
+.full .tools:not(:last-child){padding-bottom:8px}

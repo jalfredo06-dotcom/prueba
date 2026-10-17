@@ -4,7 +4,8 @@
   const BOARD_W = 1200, BOARD_H = 1600;
   const INK = {
     chalk: ['#f4f1e8', '#ffd166', '#ef476f', '#06d6a0', '#4cc9f0', '#b388ff'],
-    paper: ['#15171a', '#d62828', '#1d4ed8', '#15803d', '#c2410c', '#6d28d9']
+    paper: ['#15171a', '#d62828', '#1d4ed8', '#15803d', '#c2410c', '#6d28d9'],
+    photo: ['#ffffff', '#ffd166', '#ef476f', '#06d6a0', '#4cc9f0', '#111111']
   };
   const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
@@ -91,16 +92,22 @@
     const c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     ctx.drawImage(bmp, 0, 0, w, h);
+    const k2 = w / 1000;
+    drawStrokes(ctx, entry.strokes, 'photo', k2);
+    drawLabels(ctx, entry.labels, 1000, k2);
     if (entry.stampOn !== false) drawStamp(ctx, w, h, entry);
     return c;
   }
 
   let layer;
-  function drawStrokes(ctx, strokes, bg) {
+  /** Trazos en espacio lógico W×H, dibujados escalados por k sobre ctx. */
+  function drawStrokes(ctx, strokes, inkKey, k) {
+    if (!strokes || !strokes.length) return;
     layer = layer || document.createElement('canvas');
-    layer.width = BOARD_W; layer.height = BOARD_H;
+    layer.width = ctx.canvas.width; layer.height = ctx.canvas.height;
     const l = layer.getContext('2d');
-    const ink = INK[bg === 'chalk' ? 'chalk' : 'paper'];
+    l.scale(k, k);
+    const ink = INK[inkKey] || INK.paper;
     l.lineCap = 'round'; l.lineJoin = 'round';
     for (const s of strokes) {
       l.globalCompositeOperation = s.e ? 'destination-out' : 'source-over';
@@ -112,6 +119,34 @@
       l.lineTo(p[p.length - 2], p[p.length - 1]); l.stroke();
     }
     ctx.drawImage(layer, 0, 0);
+  }
+
+  /* Etiquetas colocables: globo con cola que señala el punto (x, y) en espacio lógico W. */
+  const mctx = document.createElement('canvas').getContext('2d');
+  function labelGeom(l, W) {
+    const fs = W / 38 * (l.s || 1);
+    mctx.font = `700 ${fs}px ${FONT}`;
+    const w = mctx.measureText(l.text).width + fs * 1.2, h = fs * 1.75, tail = fs * 0.6;
+    return { fs, w, h, tail, x0: l.x - w / 2, y0: l.y - tail - h, x1: l.x + w / 2, y1: l.y };
+  }
+  function drawLabels(ctx, labels, W, k) {
+    for (const l of labels || []) {
+      const g = labelGeom(l, W), col = tagColor(l.text);
+      ctx.save(); ctx.scale(k, k);
+      ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = g.fs * 0.3; ctx.shadowOffsetY = g.fs * 0.08;
+      ctx.fillStyle = col; rr(ctx, g.x0, g.y0, g.w, g.h, g.h / 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(l.x - g.tail * 0.8, g.y0 + g.h - 1); ctx.lineTo(l.x + g.tail * 0.8, g.y0 + g.h - 1); ctx.lineTo(l.x, l.y); ctx.closePath(); ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.fillStyle = '#fff'; ctx.font = `700 ${g.fs}px ${FONT}`; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+      ctx.fillText(l.text, l.x, g.y0 + g.h / 2 + g.fs * 0.05);
+      if (root.Render && root.Render.selected === l.id) {
+        ctx.textAlign = 'left'; ctx.lineWidth = g.fs * 0.14; ctx.setLineDash([g.fs * 0.35, g.fs * 0.25]);
+        ctx.strokeStyle = '#fff'; rr(ctx, g.x0 - 6, g.y0 - 6, g.w + 12, g.h + 12, g.h / 2 + 6); ctx.stroke();
+        ctx.strokeStyle = '#111'; ctx.lineDashOffset = g.fs * 0.3; rr(ctx, g.x0 - 6, g.y0 - 6, g.w + 12, g.h + 12, g.h / 2 + 6); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    ctx.textAlign = 'left';
   }
 
   /** Pizarra completa en 1200×1600 sobre `canvas` (se crea si no se pasa). */
@@ -132,7 +167,8 @@
       for (let y = 0; y <= BOARD_H; y += 50) { ctx.moveTo(0, y); ctx.lineTo(BOARD_W, y); }
       ctx.stroke();
     }
-    drawStrokes(ctx, entry.strokes || [], bg);
+    drawStrokes(ctx, entry.strokes, chalk ? 'chalk' : 'paper', 1);
+    drawLabels(ctx, entry.labels, BOARD_W, 1);
     // Encabezado fijo (no se borra)
     ctx.textBaseline = 'top'; ctx.fillStyle = fg;
     ctx.font = `700 44px ${FONT}`;
@@ -149,5 +185,5 @@
     return c;
   }
 
-  root.Render = { BOARD_W, BOARD_H, INK, FONT, tagColor, wrap, rr, pills, fmtDate, coordText, photo, board };
+  root.Render = { selected: null, labelGeom, BOARD_W, BOARD_H, INK, FONT, tagColor, wrap, rr, pills, fmtDate, coordText, photo, board };
 })(self);
