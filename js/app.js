@@ -48,7 +48,7 @@
   function gpsStart() {
     if (!('geolocation' in navigator)) { GPS.error = 'Sin GPS'; return gpsUi(); }
     navigator.geolocation.watchPosition((p) => {
-      GPS.fix = { lat: p.coords.latitude, lon: p.coords.longitude, alt: p.coords.altitude, acc: p.coords.accuracy, t: p.timestamp };
+      GPS.fix = { lat: p.coords.latitude, lon: p.coords.longitude, alt: p.coords.altitude, acc: p.coords.accuracy, t: p.timestamp, rx: Date.now() };
       GPS.error = null; gpsUi();
     }, (err) => {
       GPS.error = err.code === 1 ? 'GPS sin permiso' : 'Sin señal GPS'; gpsUi();
@@ -582,17 +582,136 @@
     });
   }
 
+  /* ---------- tracks GPS ---------- */
+  const fmtDur = (ms) => { const t = Math.max(0, Math.round(ms / 1000)); return `${String(Math.floor(t / 3600)).padStart(2, '0')}:${String(Math.floor(t % 3600 / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+  const fmtKm = (m) => m >= 1000 ? (m / 1000).toFixed(2) + ' km' : Math.round(m) + ' m';
+  Object.assign(Track.cfg, store.get('trk', {}));
+  const saveCfg = () => store.set('trk', Track.cfg);
+
+  function recChipUi() {
+    const chip = $('#recChip'), c = Track.cur;
+    chip.hidden = !c;
+    if (c) $('#recText').textContent = `${fmtDur(Date.now() - c.start)} · ${c.points.length}`;
+  }
+  setInterval(recChipUi, 1000);
+  Track.source = () => GPS.fix;
+  Track.onChange = recChipUi;
+  Track.onStop = (t, why) => {
+    recChipUi();
+    if (why === 'limit') toast(`⏱ Track detenido: llegó al límite de ${t.limitMs >= 3600000 ? (t.limitMs / 3600000).toFixed(1).replace('.0', '') + ' h' : Math.max(1, Math.round(t.limitMs / 60000)) + ' min'}. Se guardó (${t.points.length} puntos).`, 7000);
+    else if (why === 'interrupted') toast(`Un track quedó interrumpido; se guardó hasta ${TrackFmt.hms(t.end)} (${t.points.length} puntos).`, 7000);
+  };
+
+  function trackSheet() {
+    sheet('Track GPS', (api) => {
+      const view = el('div', { style: 'display:flex;flex-direction:column;gap:14px' });
+      api.body.append(view);
+      let tm = 0;
+      const build = async () => {
+        clearInterval(tm); view.replaceChildren();
+        const c = Track.cur;
+        if (c) {
+          const big = el('div', { style: 'font:700 2.6rem Georgia,serif;text-align:center;font-variant-numeric:tabular-nums' });
+          const grid = el('div', { class: 'fix', style: 'text-align:center' }), note = el('div', { class: 'hint', style: 'text-align:center' });
+          const upd = () => {
+            if (!Track.cur) return;
+            const left = c.limitMs - (Date.now() - c.start), p = c.points[c.points.length - 1];
+            big.textContent = fmtDur(Date.now() - c.start);
+            grid.textContent = `${c.points.length} puntos · ${fmtKm(c.dist || 0)} · quedan ${fmtDur(left)}`;
+            note.textContent = (Track.lastErr ? '⚠ ' + Track.lastErr + '. ' : '') + (p ? `Último punto ${TrackFmt.hms(p.t)} (±${Math.round(p.acc)} m). ` : 'Esperando el primer punto… ') +
+              (c.discarded ? `${c.discarded} descartados por baja precisión. ` : '') +
+              (Track.wakeOn ? '🔆 Pantalla encendida.' : '⚠ Mantén la pantalla encendida: al bloquearla el GPS puede detenerse.');
+          };
+          upd(); tm = setInterval(() => { if (!view.isConnected || !Track.cur) { clearInterval(tm); return; } upd(); }, 1000);
+          view.append(el('div', { class: 'sec' }, el('h3', { text: '● Grabando' }), big, grid, note),
+            el('button', { class: 'btn pri', style: 'background:var(--danger);border-color:var(--danger)', text: '■ Detener y guardar', onclick: async () => { await Track.stop(); build(); } }));
+          return;
+        }
+        const lim = el('input', { type: 'text', inputmode: 'decimal', value: String(Track.cfg.limitH) }); lim.value = String(Track.cfg.limitH);
+        const acc = el('input', { type: 'text', inputmode: 'numeric', value: String(Track.cfg.maxAcc) }); acc.value = String(Track.cfg.maxAcc);
+        const wake = el('input', { type: 'checkbox' }); wake.checked = Track.cfg.wake;
+        const read = () => {
+          const h = parseFloat(String(lim.value).replace(',', '.')), a = parseFloat(String(acc.value).replace(',', '.'));
+          Track.cfg.limitH = isFinite(h) ? Math.min(24, Math.max(0.1, h)) : 4;
+          Track.cfg.maxAcc = isFinite(a) && a >= 0 ? a : 50; Track.cfg.wake = wake.checked; saveCfg();
+        };
+        [lim, acc, wake].forEach(i => i.addEventListener('change', read));
+        view.append(
+          el('button', { class: 'btn pri', style: 'padding:16px;font-size:1.05rem', text: '● Iniciar grabación', onclick: async () => {
+            read();
+            if (!navigator.geolocation) return toast('Este navegador no tiene GPS');
+            await Track.start(); toast('Grabando un punto cada 5 s'); build();
+          } }),
+          el('div', { class: 'sec' }, el('h3', { text: 'Ajustes' }),
+            el('label', { class: 'f' }, 'Duración máxima (horas) — se detiene sola', lim),
+            el('label', { class: 'f' }, 'Descartar puntos con precisión peor de (m; 0 = no descartar)', acc),
+            el('label', { class: 'check' }, wake, 'Mantener la pantalla encendida al grabar'),
+            el('div', { class: 'hint', text: 'Una app web no puede grabar GPS con la pantalla apagada. Deja la app abierta en primer plano; si se corta, el track se parte en segmentos y no se inventan puntos.' })));
+        const list = el('div', { class: 'menu-list' });
+        const all = (await DB.all('tracks')).filter(t => t.status !== 'recording').sort((a, b) => b.start - a.start);
+        if (all.length) list.append(el('h3', { class: 'hint', text: 'TRACKS GUARDADOS' }));
+        for (const t of all) {
+          const st = TrackFmt.stats(t);
+          list.append(el('button', { onclick: () => trackDetail(t.id, build) }, el('span', { text: '🥾' }),
+            el('span', {}, t.name, el('small', { text: `${TrackFmt.ymd(t.start)} · ${fmtDur(st.dur)} · ${fmtKm(st.dist)} · ${st.count} pts${t.status === 'limit' ? ' · límite' : t.status === 'interrupted' ? ' · interrumpido' : ''}` }))));
+        }
+        view.append(list);
+      };
+      build();
+    }, { onClose: () => {} });
+  }
+
+  async function trackDetail(id, refresh) {
+    let t = await DB.get('tracks', id); if (!t) return;
+    const st = TrackFmt.stats(t);
+    sheet(t.name, (api) => {
+      const cv = el('canvas', { width: 640, height: 320, style: 'width:100%;border-radius:12px;background:#1f3a2f' });
+      drawTrack(cv, t);
+      const wpts = () => S.entries.filter(e => e.coords && e.created >= t.start - 300000 && e.created <= (t.end || t.start) + 300000)
+        .map(e => ({ lat: e.coords.lat, lon: e.coords.lon, alt: e.coords.alt, t: e.created, name: e.tags.join(', ') || (e.type === 'board' ? (e.title || 'Pizarra') : 'Foto'), desc: e.note }));
+      const nW = wpts().length, base = Exp.fileBase(t.name);
+      const dl = (txt, mime, ext) => Exp.save(new Blob([txt], { type: mime }), base + '.' + ext);
+      api.body.append(cv,
+        el('div', { class: 'sec' }, el('div', { class: 'fix', text: `${TrackFmt.ymd(t.start)} · ${TrackFmt.hms(t.start)} → ${TrackFmt.hms(t.end || t.start)}` }),
+          el('div', { class: 'fix', text: `${fmtDur(st.dur)} · ${fmtKm(st.dist)} · ${st.count} puntos${st.segs > 1 ? ` · ${st.segs} segmentos (hubo cortes)` : ''}${t.discarded ? ` · ${t.discarded} descartados` : ''}` })),
+        el('div', { class: 'menu-list' },
+          el('button', { onclick: () => dl(TrackFmt.toGpx(t, []), 'application/gpx+xml', 'gpx') }, el('span', { text: '🧭' }), el('span', {}, 'GPX', el('small', { text: 'Para GPS de mano, QGIS, Garmin, etc.' }))),
+          el('button', { onclick: () => dl(TrackFmt.toKml(t, []), 'application/vnd.google-earth.kml+xml', 'kml') }, el('span', { text: '🌍' }), el('span', {}, 'KML', el('small', { text: 'Google Earth / QGIS' }))),
+          el('button', { onclick: () => dl(TrackFmt.toCsv(t, settings.crs), 'text/csv', 'csv') }, el('span', { text: '📊' }), el('span', {}, 'CSV de puntos', el('small', { text: 'Fecha, hora hh:mm:ss, lat/lon y Este/Norte' }))),
+          nW ? el('button', { onclick: () => dl(TrackFmt.toGpx(t, wpts()), 'application/gpx+xml', 'gpx') }, el('span', { text: '📍' }), el('span', {}, `GPX + ${nW} hojas de la libreta`, el('small', { text: 'Fotos y pizarras tomadas durante el recorrido, como waypoints' }))) : null,
+          el('button', { onclick: async () => { const n = (prompt('Nombre del track:', t.name) || '').trim(); if (!n) return; t.name = n; await DB.put('tracks', t); api.close(); refresh && refresh(); trackDetail(id, refresh); } }, el('span', { text: '✏️' }), el('span', { text: 'Renombrar' })),
+          el('button', { onclick: async () => { if (!confirm('¿Eliminar este track?')) return; await DB.del('tracks', id); api.close(); refresh && refresh(); } }, el('span', { text: '🗑' }), el('span', { text: 'Eliminar track', style: 'color:var(--danger)' }))));
+    });
+  }
+  function drawTrack(cv, t) {
+    const x = cv.getContext('2d'), W = cv.width, H = cv.height, pts = t.points;
+    x.fillStyle = '#1f3a2f'; x.fillRect(0, 0, W, H);
+    if (pts.length < 2) { x.fillStyle = '#9db3a3'; x.font = '24px system-ui'; x.textAlign = 'center'; x.fillText('Sin puntos suficientes', W / 2, H / 2); return; }
+    const lat0 = pts.reduce((a, p) => a + p.lat, 0) / pts.length, kx = Math.cos(lat0 * Math.PI / 180);
+    const X = pts.map(p => p.lon * kx), Y = pts.map(p => -p.lat);
+    const x0 = Math.min(...X), x1 = Math.max(...X), y0 = Math.min(...Y), y1 = Math.max(...Y), pad = 30;
+    const k = Math.min((W - pad * 2) / Math.max(x1 - x0, 1e-9), (H - pad * 2) / Math.max(y1 - y0, 1e-9));
+    const ox = (W - (x1 - x0) * k) / 2, oy = (H - (y1 - y0) * k) / 2, P = (i) => [ox + (X[i] - x0) * k, oy + (Y[i] - y0) * k];
+    x.lineWidth = 4; x.lineCap = x.lineJoin = 'round'; x.strokeStyle = '#ffd166'; x.beginPath();
+    pts.forEach((p, i) => { const [a, b] = P(i); (i === 0 || p.s !== pts[i - 1].s) ? x.moveTo(a, b) : x.lineTo(a, b); });
+    x.stroke();
+    const dot = (i, c) => { const [a, b] = P(i); x.fillStyle = c; x.beginPath(); x.arc(a, b, 9, 0, 7); x.fill(); x.strokeStyle = '#fff'; x.lineWidth = 3; x.stroke(); };
+    dot(0, '#06d6a0'); dot(pts.length - 1, '#ef476f');
+  }
+
   /* ---------- arranque ---------- */
   $('#nbBtn').onclick = menu;
   $('#gpsChip').onclick = locationSheet;
   $('#btnPhoto').onclick = () => $('#camIn').click();
   $('#btnGallery').onclick = () => $('#galIn').click();
+  $('#btnTrack').onclick = trackSheet;
+  $('#recChip').onclick = trackSheet;
   $('#btnBoard').onclick = () => editBoard(newEntry('board'), true);
   $('#camIn').onchange = (e) => onPicked(e.target);
   $('#galIn').onchange = (e) => onPicked(e.target);
   $('#impIn').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importBackup(f); };
 
-  loadAll().then(() => { gpsStart(); }).catch(err => { toast('Error al abrir la base de datos: ' + err.message, 6000); });
+  loadAll().then(() => { gpsStart(); return Track.recover(); }).catch(err => { toast('Error al abrir la base de datos: ' + err.message, 6000); });
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
   window.__app = { S, GPS, settings };
 })();

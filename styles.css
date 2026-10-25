@@ -112,3 +112,9 @@ details summary{cursor:pointer;font-weight:600;font-size:.88rem}
 .full .tools{background:var(--forest)}
 .full .tools+.tools{padding-top:0}
 .full .tools:not(:last-child){padding-bottom:8px}
+
+.rec{display:flex;align-items:center;gap:6px;background:#b3261e;color:#fff;padding:7px 11px;border-radius:99px;font-size:.74rem;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+.rec .dot{background:#fff;animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.25}}
+#top:has(.rec:not([hidden])) .gps{max-width:42%}
+#bar button{font-size:.78rem}

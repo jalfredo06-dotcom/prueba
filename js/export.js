@@ -136,5 +136,5 @@
     return { name: d.notebook.name, entries };
   }
 
-  root.Exp = { pdf, kml, backup, readBackup, toBlob, sheetCanvas };
+  root.Exp = { save, fileBase: safeName, pdf, kml, backup, readBackup, toBlob, sheetCanvas };
 })(self);

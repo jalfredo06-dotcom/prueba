@@ -15,6 +15,7 @@
 <body>
 <header id="top">
   <button id="nbBtn" class="title" aria-label="Libretas y exportación"><span id="nbName">Libreta</span> <span aria-hidden="true">▾</span></button>
+  <button id="recChip" class="rec" hidden aria-label="Track en grabación"><i class="dot"></i><span id="recText"></span></button>
   <button id="gpsChip" class="gps" aria-label="Ubicación actual"><i class="dot"></i><span id="gpsText">Buscando GPS…</span></button>
 </header>
 <div id="tagFilter" class="chips filter" hidden></div>
@@ -23,6 +24,7 @@
   <button id="btnPhoto" class="primary"><b>📷</b>Foto</button>
   <button id="btnGallery"><b>🖼️</b>Galería</button>
   <button id="btnBoard"><b>🧾</b>Pizarra</button>
+  <button id="btnTrack"><b>🥾</b>Track</button>
 </nav>
 <input id="camIn" type="file" accept="image/*" capture="environment" hidden>
 <input id="galIn" type="file" accept="image/*" hidden>
@@ -34,6 +36,8 @@
 <script src="js/db.js"></script>
 <script src="js/render.js"></script>
 <script src="js/export.js"></script>
+<script src="js/trackfmt.js"></script>
+<script src="js/track.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

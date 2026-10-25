@@ -5,11 +5,12 @@
   function open() {
     if (dbp) return dbp;
     dbp = new Promise((res, rej) => {
-      const r = indexedDB.open('libreta-campo', 1);
+      const r = indexedDB.open('libreta-campo', 2);
       r.onupgradeneeded = () => {
         const db = r.result;
-        db.createObjectStore('notebooks', { keyPath: 'id', autoIncrement: true });
-        db.createObjectStore('entries', { keyPath: 'id', autoIncrement: true }).createIndex('nb', 'nb');
+        if (!db.objectStoreNames.contains('notebooks')) db.createObjectStore('notebooks', { keyPath: 'id', autoIncrement: true });
+        if (!db.objectStoreNames.contains('entries')) db.createObjectStore('entries', { keyPath: 'id', autoIncrement: true }).createIndex('nb', 'nb');
+        if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks', { keyPath: 'id', autoIncrement: true });
       };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
