@@ -250,7 +250,7 @@
     const stampCrs = el('select', {}, Geo.CRS.map(c => el('option', { value: c.id, text: `EPSG:${c.id} · ${c.name}` })));
     stampCrs.value = String(entry.stampCrs || settings.crs);
     stampCrs.addEventListener('change', () => { entry.stampCrs = Number(stampCrs.value); settings.crs = entry.stampCrs; store.set('crs', settings.crs); gpsUi(); onChange(); });
-    coordSec.append(el('label', { class: 'f' }, opts.photo ? 'Mostrar en el sello como' : 'Mostrar en el encabezado como', stampCrs));
+    coordSec.append(el('label', { class: 'f' }, opts.photo ? 'Mostrar en el sello como (queda como predeterminado)' : 'Mostrar en el encabezado como (queda como predeterminado)', stampCrs));
     if (opts.photo) {
       const cb = el('input', { type: 'checkbox' }); cb.checked = entry.stampOn !== false;
       cb.addEventListener('change', () => { entry.stampOn = cb.checked; onChange(); });
@@ -535,6 +535,7 @@
         el('h3', { class: 'hint', text: 'OTROS' }),
         act('📥', 'Importar respaldo', 'Restaura un ZIP como libreta nueva', () => $('#impIn').click()),
         act('✏️', 'Renombrar libreta', S.nb.name, async () => { const n = (prompt('Nuevo nombre:', S.nb.name) || '').trim(); if (!n) return; S.nb.name = n; await DB.put('notebooks', S.nb); api.close(); await refreshList(); }),
+        act('🧭', 'Sistema de coordenadas por defecto', `Sello de fotos y pizarras: EPSG:${settings.crs}`, () => { api.close(); crsSettings(); }),
         act('🏷', 'Gestionar etiquetas', 'Quitar etiquetas de la lista rápida', () => { api.close(); manageTags(); }),
         act('🗑', 'Eliminar esta libreta', 'Borra todas sus hojas', async () => {
           if (!confirm(`¿Eliminar "${S.nb.name}" y todas sus hojas?`)) return;
@@ -542,6 +543,30 @@
         }));
       if (installEvt) list.append(act('📲', 'Instalar aplicación', 'Añadir a la pantalla de inicio', async () => { installEvt.prompt(); installEvt = null; api.close(); }));
       api.body.append(list);
+    });
+  }
+  function crsSettings() {
+    sheet('Coordenadas por defecto', (api) => {
+      const sel = el('select', {}, Geo.CRS.map(c => el('option', { value: c.id, text: `EPSG:${c.id} · ${c.name}` })));
+      sel.value = String(settings.crs);
+      const all = el('input', { type: 'checkbox' });
+      api.body.append(
+        el('div', { class: 'sec' }, el('h3', { text: 'Sistema para el sello y el encabezado' }), sel,
+          el('div', { class: 'hint', text: 'Se usa en las hojas nuevas (sello de las fotos, encabezado de las pizarras), en la lista y en el indicador GPS de arriba. Cada hoja aún puede cambiarlo dentro de su editor.' })),
+        el('label', { class: 'check' }, all, 'Aplicar también a todas las hojas de esta libreta'));
+      api.foot.append(el('button', { class: 'btn pri', text: 'Guardar', onclick: async () => {
+        settings.crs = Number(sel.value); store.set('crs', settings.crs); store.set('manualCrs', settings.crs);
+        if (all.checked) {
+          const es = await DB.entriesOf(S.nb.id);
+          for (const e of es) {
+            e.stampCrs = settings.crs;
+            if (e.type === 'photo' && e.blob) { const bmp = await createImageBitmap(e.blob); e.thumb = await Exp.toBlob(thumbOf(Render.photo(e, bmp, 480)), 'image/jpeg', 0.8); bmp.close && bmp.close(); }
+            else if (e.type === 'board') e.thumb = await Exp.toBlob(thumbOf(Render.board(e, null, S.nb.name), 360), 'image/jpeg', 0.8);
+            await DB.put('entries', e);
+          }
+        }
+        gpsUi(); api.close(); await refreshList(); toast(`Predeterminado: EPSG:${settings.crs}`);
+      } }));
     });
   }
   function manageTags() {
