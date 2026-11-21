@@ -24,8 +24,14 @@ Todo se procesa en el navegador: las fotos y los videos no se suben a ningún se
 
 ## Probar localmente
 
+Basta con abrir `index.html` con doble clic, o servir la carpeta:
 ```
 cd tarjetas
 npx http-server -p 8080 .   # http://localhost:8080
 ```
-(Se necesita un servidor porque usa módulos JS; abrir `index.html` con doble clic no funciona.)
+
+## Estructura y cambios en el código
+
+- `tarjetas.js`: el programa completo en un solo archivo (es lo que carga `index.html`).
+- `js/`: el código fuente por módulos. Después de editar cualquier archivo de `js/`, regenera `tarjetas.js` con `sh build.sh` (usa esbuild) y cambia el `?v=` de `index.html`.
+- Si la app no arranca, la página muestra un aviso con la causa.

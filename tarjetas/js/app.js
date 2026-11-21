@@ -1,8 +1,8 @@
-import { OCCASIONS, BACKGROUNDS, PATTERNS, PARTICLES, FRAMES, PHOTO_ANIMS, TEXT_ANIMS, FONTS, RATIOS, QUALITIES } from './data.js?v=20261122';
-import { buildTimeline, renderFrame, clearFitCache, VIDEO_DELAY } from './render.js?v=20261122';
-import { MUSIC_STYLES, MUSIC_BY_OCCASION, SynthPlayer } from './music.js?v=20261122';
-import { makeZip } from './zip.js?v=20261122';
-import { readNamesFile, parseLines } from './lista.js?v=20261122';
+import { OCCASIONS, BACKGROUNDS, PATTERNS, PARTICLES, FRAMES, PHOTO_ANIMS, TEXT_ANIMS, FONTS, RATIOS, QUALITIES } from './data.js';
+import { buildTimeline, renderFrame, clearFitCache, VIDEO_DELAY } from './render.js';
+import { MUSIC_STYLES, MUSIC_BY_OCCASION, SynthPlayer } from './music.js';
+import { makeZip } from './zip.js';
+import { readNamesFile, parseLines } from './lista.js';
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
@@ -899,5 +899,6 @@ function init() {
   Promise.all(Object.values(FONTS).map((f) => document.fonts.load(`${f.weight} 40px "${f.name}"`).catch(() => {})))
     .then(() => { clearFitCache(); dirty = true; });
   setTimeout(play, 400);
+  window.__appReady = true;
 }
 init();

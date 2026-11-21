@@ -10,13 +10,18 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=Dancing+Script:wght@700&family=Great+Vibes&family=Lobster&family=Montserrat:wght@400;600;700&family=Pacifico&family=Playfair+Display:wght@700&family=Quicksand:wght@500;600;700&display=swap">
-<link rel="stylesheet" href="styles.css?v=20261122">
+<link rel="stylesheet" href="styles.css?v=20261122b">
 </head>
 <body>
 <header class="top">
   <div class="brand"><span class="logo" aria-hidden="true">✨</span><div><h1>Tarjetas Animadas</h1><p>Crea un video corto para cualquier ocasión</p></div></div>
 </header>
 
+<div id="loadError" class="load-error" role="alert" hidden>
+  <b>⚠️ La app no terminó de cargar.</b>
+  Revisa que subiste la carpeta <code>tarjetas</code> completa (debe incluir el archivo <code>tarjetas.js</code>) y recarga la página con Ctrl + F5. Si continúa, envía este detalle:
+  <span id="loadErrorMsg"></span>
+</div>
 <main class="layout">
   <section class="preview" aria-label="Vista previa">
     <div class="stage" id="stage"><canvas id="cv" aria-label="Vista previa animada de la tarjeta"></canvas></div>
@@ -200,6 +205,22 @@
 <div id="toast" role="status" aria-live="polite"></div>
 <audio id="audio" loop preload="auto"></audio>
 <div id="media" aria-hidden="true"></div>
-<script type="module" src="js/app.js?v=20261122"></script>
+<script>
+  // Si la app no arranca, muestra la causa en pantalla (en vez de una página vacía).
+  (function () {
+    var errs = [];
+    window.addEventListener('error', function (e) {
+      var t = e.target;
+      if (t && t.tagName === 'SCRIPT') errs.push('No se pudo descargar ' + (t.getAttribute('src') || 'el programa'));
+      else errs.push((e.message || 'Error') + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : ''));
+    }, true);
+    setTimeout(function () {
+      if (window.__appReady) return;
+      document.getElementById('loadError').hidden = false;
+      document.getElementById('loadErrorMsg').textContent = errs.join(' · ') || 'El programa no terminó de cargar.';
+    }, 6000);
+  })();
+</script>
+<script src="tarjetas.js?v=20261122b"></script>
 </body>
 </html>
