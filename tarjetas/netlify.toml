@@ -9,8 +9,5 @@
   [headers.values]
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-
-[[headers]]
-  for = "/js/*"
-  [headers.values]
-    Cache-Control = "public, max-age=3600"
+    # Siempre revisar si hay una versión nueva (evita que el navegador use código viejo tras actualizar).
+    Cache-Control = "public, max-age=0, must-revalidate"

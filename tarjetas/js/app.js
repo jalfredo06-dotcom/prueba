@@ -1,7 +1,8 @@
-import { OCCASIONS, BACKGROUNDS, PATTERNS, PARTICLES, FRAMES, PHOTO_ANIMS, TEXT_ANIMS, FONTS, RATIOS, QUALITIES } from './data.js';
-import { buildTimeline, renderFrame, clearFitCache, VIDEO_DELAY } from './render.js';
-import { MUSIC_STYLES, MUSIC_BY_OCCASION, SynthPlayer } from './music.js';
-import { makeZip } from './zip.js';
+import { OCCASIONS, BACKGROUNDS, PATTERNS, PARTICLES, FRAMES, PHOTO_ANIMS, TEXT_ANIMS, FONTS, RATIOS, QUALITIES } from './data.js?v=20261122';
+import { buildTimeline, renderFrame, clearFitCache, VIDEO_DELAY } from './render.js?v=20261122';
+import { MUSIC_STYLES, MUSIC_BY_OCCASION, SynthPlayer } from './music.js?v=20261122';
+import { makeZip } from './zip.js?v=20261122';
+import { readNamesFile, parseLines } from './lista.js?v=20261122';
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
@@ -827,19 +828,17 @@ function bind() {
   $('#cancelBtn').addEventListener('click', () => { cancelRec = true; });
   $('#batchVideoBtn').addEventListener('click', () => batchExport('video'));
   $('#batchPngBtn').addEventListener('click', () => batchExport('png'));
-  $('#names').addEventListener('input', (e) => setNames(e.target.value.split(/\r?\n/)));
+  $('#names').addEventListener('input', (e) => setNames(parseLines(e.target.value, false)));
   $('#namesFile').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
     if (!f) return;
-    const text = await f.text();
-    const isCsv = /\.csv$/i.test(f.name) || /[;,\t]/.test(text);
-    let rows = text.split(/\r?\n/).map((l) => (isCsv ? l.split(/[;,\t]/)[0] : l).replace(/^\s*["']|["']\s*$/g, '').trim()).filter(Boolean);
-    if (rows.length && /^(nombres?|names?|invitados?)$/i.test(rows[0])) rows = rows.slice(1);
-    if (!rows.length) { toast('El archivo no tiene nombres'); return; }
+    let rows;
+    try { rows = await readNamesFile(f); } catch (err) { toast(err.message, 6000); return; }
+    if (!rows.length) { toast('No se encontraron nombres en el archivo (deben ir en la primera columna, uno por fila)', 5000); return; }
     $('#names').value = rows.join('\n');
     setNames(rows);
-    toast(`${state.names.length} nombre(s) cargado(s)`);
+    toast(`✅ ${state.names.length} nombre(s) cargado(s)` + (rows.length > MAX_NAMES ? ` de ${rows.length} (máximo ${MAX_NAMES})` : ''), 4000);
   });
   $('#nameChips').addEventListener('click', (e) => {
     const b = e.target.closest('[data-name]');

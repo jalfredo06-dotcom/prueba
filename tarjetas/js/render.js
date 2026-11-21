@@ -1,7 +1,7 @@
 // Motor de render: dibuja un fotograma de la tarjeta en el instante t (segundos).
 // Todo es determinista (depende solo de t y del estado), así se puede adelantar
 // o retroceder la vista previa y grabar el video con el mismo resultado.
-import { BACKGROUNDS, FONTS } from './data.js';
+import { BACKGROUNDS, FONTS } from './data.js?v=20261122';
 
 const TAU = Math.PI * 2;
 const OVERLAP = 0.45; // segundos de fundido cruzado entre escenas

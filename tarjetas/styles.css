@@ -178,3 +178,5 @@ dialog::backdrop { background: rgba(15, 8, 30, 0.6); backdrop-filter: blur(3px);
   .ratio-grid { grid-template-columns: repeat(3, 1fr); }
   .row2 { gap: 8px; }
 }
+
+input::placeholder, textarea::placeholder { font-style: italic; opacity: 0.6; }
