@@ -5,6 +5,7 @@ import { BACKGROUNDS, FONTS } from './data.js';
 
 const TAU = Math.PI * 2;
 const OVERLAP = 0.45; // segundos de fundido cruzado entre escenas
+export const VIDEO_DELAY = 0.3; // el clip empieza a sonar/moverse este tiempo después de iniciar su escena
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const seg = (lt, a, b) => clamp((lt - a) / (b - a));
@@ -169,7 +170,11 @@ export function buildTimeline(s) {
   const list = [];
   const add = (type, dur, extra = {}) => list.push({ type, dur: dur * k, ...extra });
   add('intro', 3.6);
-  s.photos.forEach((_, i) => add('photo', 3.3, { i }));
+  // Los videos duran lo que dure el clip (más la entrada y la salida), sin importar el ritmo.
+  s.photos.forEach((ph, i) => {
+    if (ph.kind === 'video') list.push({ type: 'photo', i, dur: Math.max(3.3 * k, VIDEO_DELAY + ph.clip + 0.8) });
+    else add('photo', 3.3, { i });
+  });
   const words = (s.message || '').trim().split(/\s+/).filter(Boolean).length;
   if (words) add('message', clamp(2.8 + words * 0.3, 4.5, 10));
   if (s.showDetails && hasDetails(s)) add('details', 4.8);
@@ -475,9 +480,18 @@ function drawParticles(env) {
 }
 
 // ---------- fotos ----------
+// Ancho/alto reales de una imagen, lienzo o video.
+const dimW = (img) => img.videoWidth || img.width;
+const dimH = (img) => img.videoHeight || img.height;
+// Qué dibujar de un elemento: el cuadro actual del video (o su portada mientras carga) o la foto.
+function mediaSrc(ph) {
+  if (ph.kind !== 'video') return ph.img;
+  return ph.img.readyState >= 2 && ph.img.videoWidth ? ph.img : ph.poster;
+}
+
 function drawCover(ctx, img, x, y, w, h, kb = 1, pan = 0) {
-  const sc = Math.max(w / img.width, h / img.height) * kb;
-  const dw = img.width * sc, dh = img.height * sc;
+  const sc = Math.max(w / dimW(img), h / dimH(img)) * kb;
+  const dw = dimW(img) * sc, dh = dimH(img) * sc;
   ctx.save();
   ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
   ctx.drawImage(img, x + (w - dw) / 2 + pan * w, y + (h - dh) / 2, dw, dh);
@@ -491,7 +505,7 @@ function frameShadow(env) {
 // Dibuja la foto enmarcada, centrada en el origen, dentro de una caja bw × bh.
 function drawFramedPhoto(env, img, bw, bh, kb, pan, frame) {
   const { ctx, u } = env;
-  const a = clamp(img.width / img.height, 0.62, 1.7);
+  const a = clamp(dimW(img) / dimH(img), 0.62, 1.7);
   ctx.save();
   if (frame === 'circulo') {
     const D = Math.min(bw, bh) * 0.92;
@@ -626,7 +640,7 @@ function photo(env, sc, lt) {
     case 'revelado': reveal = ease.inOutCubic(seg(lt, 0, 1.3)); rot = 0; break;
   }
   scl *= 1 + seg(lt, d - 0.8, d) * 0.05;
-  const kb = 1 + 0.08 * seg(lt, 0, d);
+  const kb = 1 + (ph.kind === 'video' ? 0.03 : 0.08) * seg(lt, 0, d);
   const pan = (rnd(sc.i, 7) - 0.5) * 0.06 * seg(lt, 0, d);
   ctx.save();
   ctx.translate(W / 2 + dx, H * (portrait ? 0.48 : 0.5) + dy);
@@ -635,7 +649,7 @@ function photo(env, sc, lt) {
   if (reveal < 1) {
     ctx.beginPath(); ctx.arc(0, 0, (Math.hypot(bw, bh) / 2) * reveal + 1, 0, TAU); ctx.clip();
   }
-  drawFramedPhoto(env, ph.img, bw, bh, kb, pan, s.frame);
+  drawFramedPhoto(env, mediaSrc(ph), bw, bh, kb, pan, s.frame);
   ctx.restore();
 }
 
@@ -772,7 +786,7 @@ function outro(env, sc, lt) {
       ctx.fillStyle = '#fdfdf8';
       ctx.fillRect(-size / 2, -size / 2, size, size + pad * 2.5);
       noShadow(ctx);
-      drawCover(ctx, ph.img, -size / 2 + pad, -size / 2 + pad, size - pad * 2, size - pad * 2, 1.05);
+      drawCover(ctx, mediaSrc(ph), -size / 2 + pad, -size / 2 + pad, size - pad * 2, size - pad * 2, 1.05);
       ctx.restore();
     });
     const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(W, H) * 0.5);

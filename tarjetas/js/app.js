@@ -1,11 +1,14 @@
 import { OCCASIONS, BACKGROUNDS, PATTERNS, PARTICLES, FRAMES, PHOTO_ANIMS, TEXT_ANIMS, FONTS, RATIOS, QUALITIES } from './data.js';
-import { buildTimeline, renderFrame, clearFitCache } from './render.js';
+import { buildTimeline, renderFrame, clearFitCache, VIDEO_DELAY } from './render.js';
+import { MUSIC_STYLES, MUSIC_BY_OCCASION, SynthPlayer } from './music.js';
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
 const ctx = cv.getContext('2d');
 const audio = $('#audio');
-const MAX_PHOTOS = 12;
+const MAX_PHOTOS = 12; // fotos + videos
+const MAX_VIDEOS = 6;
+const MAX_CLIP = 10; // segundos que se usan de cada video
 
 const state = {
   occasion: 'cumple', emoji: '', title: '', to: '', message: '', from: '',
@@ -14,7 +17,9 @@ const state = {
   pattern: 'bokeh', particles: 'confeti', frame: 'polaroid', photoAnim: 'mixto', textAnim: 'lineas',
   titleFont: 'pacifico', bodyFont: 'quicksand', textAuto: true, textColor: '#ffffff', accentColor: '#ffd166',
   showEmoji: true, photos: [], speed: 1, orient: 'v', ratio: '16:9', quality: 1080, volume: 0.8,
+  music: 'fiesta', // 'none' | estilo generado | 'file'
 };
+let musicManual = false; // el usuario eligió música: no cambiarla al cambiar de ocasión
 
 let tl = buildTimeline(state);
 let playing = false, playT = 0, t0 = 0, dirty = true, exporting = false, suggIdx = 0;
@@ -22,6 +27,7 @@ let playing = false, playT = 0, t0 = 0, dirty = true, exporting = false, suggIdx
 // ---------- utilidades ----------
 const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function toast(msg, ms = 2600) {
   const el = $('#toast');
   el.textContent = msg;
@@ -55,7 +61,7 @@ function layoutCanvas() {
   const cs = getComputedStyle(stage);
   const maxW = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
   const mobile = window.innerWidth < 900;
-  const maxH = mobile ? window.innerHeight * 0.3 : Math.max(280, window.innerHeight - 230);
+  const maxH = mobile ? window.innerHeight * 0.3 : Math.max(260, window.innerHeight - 400);
   const scale = Math.min(maxW / W, maxH / H);
   cv.style.width = `${Math.round(W * scale)}px`;
   cv.style.height = `${Math.round(H * scale)}px`;
@@ -79,17 +85,22 @@ function updateInfo() {
   const { W, H } = exportSize();
   const r = RATIOS.find((x) => x.id === state.ratio);
   const { w, h } = ratioDims(r, state.orient);
-  $('#formatInfo').textContent = `${w}:${h} · ${W}×${H} px · duración ${fmt(tl.total)} · ${state.photos.length} foto(s)`;
+  const nv = state.photos.filter((p) => p.kind === 'video').length;
+  const np = state.photos.length - nv;
+  $('#formatInfo').textContent = `${w}:${h} · ${W}×${H} px · duración ${fmt(tl.total)} · ${np} foto(s)` + (nv ? ` · ${nv} video(s)` : '');
 }
 
 function frame() {
   if (!exporting) {
     if (playing) {
       playT = (performance.now() - t0) / 1000;
-      if (playT > tl.total + 1) { playT = 0; t0 = performance.now(); syncAudio(); }
+      if (playT > tl.total + 1) { playT = 0; t0 = performance.now(); restartMusic(0); }
+      syncVideos(playT, true);
+      updateGain(playT);
       dirty = true;
     }
     if (dirty) {
+      if (!playing) syncVideos(playT, false);
       renderFrame(ctx, cv.width, cv.height, Math.min(playT, tl.total), state, tl);
       $('#scrub').value = Math.min(playT, tl.total);
       $('#timeLbl').textContent = `${fmt(Math.min(playT, tl.total))} / ${fmt(tl.total)}`;
@@ -105,28 +116,106 @@ function play() {
   t0 = performance.now() - playT * 1000;
   $('#playBtn').textContent = '❚❚';
   $('#playBtn').setAttribute('aria-label', 'Pausar');
-  syncAudio();
+  restartMusic(playT);
 }
 function pause() {
   playing = false;
   $('#playBtn').textContent = '▶';
   $('#playBtn').setAttribute('aria-label', 'Reproducir');
-  audio.pause();
+  stopMusic();
+  pauseVideos();
 }
 function seek(t) {
   playT = t;
   t0 = performance.now() - t * 1000;
   dirty = true;
-  if (playing) syncAudio();
+  if (playing) restartMusic(t);
 }
-function syncAudio() {
-  if (!audio.src) return;
-  audio.volume = state.volume;
-  if (playing && playT < tl.total) {
-    const d = audio.duration || Infinity;
-    audio.currentTime = playT % d;
+
+// ---------- audio: música de fondo + sonido de los videos ----------
+// Todo pasa por un AudioContext para poder mezclarlo y grabarlo en el video.
+// Se crea con el primer toque del usuario (los navegadores bloquean el audio antes).
+let AC = null;
+function ensureAudio() {
+  if (AC) { if (AC.ac.state === 'suspended') AC.ac.resume(); return AC; }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  const ac = new Ctx();
+  const master = ac.createGain();
+  master.connect(ac.destination);
+  const music = ac.createGain();
+  music.gain.value = 0;
+  music.connect(master);
+  const videoBus = ac.createGain();
+  videoBus.connect(master);
+  ac.createMediaElementSource(audio).connect(music);
+  AC = { ac, master, music, videoBus, synth: new SynthPlayer(ac, music) };
+  ac.resume();
+  state.photos.forEach(routeVideo);
+  if (playing) restartMusic(playT);
+  return AC;
+}
+function routeVideo(ph) {
+  if (ph.kind !== 'video') return;
+  if (AC && ph.sound && !ph.node) {
+    ph.node = AC.ac.createMediaElementSource(ph.img);
+    ph.node.connect(AC.videoBus);
+  }
+  ph.img.muted = !(AC && ph.sound);
+}
+function restartMusic(t) {
+  stopMusic();
+  if (!AC || !(playing || exporting) || t >= tl.total) return;
+  if (state.music === 'file') {
+    if (!audio.src) return;
+    const d = audio.duration;
+    audio.currentTime = d && isFinite(d) ? t % d : t;
     audio.play().catch(() => {});
-  } else audio.pause();
+  } else if (MUSIC_STYLES[state.music]) AC.synth.start(state.music, t);
+}
+function stopMusic() {
+  audio.pause();
+  if (AC) AC.synth.stop();
+}
+// ¿Hay un video con sonido reproduciéndose en el instante t?
+function soundingVideo(t) {
+  return tl.scenes.some((sc) => {
+    const ph = sc.type === 'photo' && state.photos[sc.i];
+    return ph && ph.kind === 'video' && ph.sound && t >= sc.start + VIDEO_DELAY && t < sc.start + VIDEO_DELAY + ph.clip;
+  });
+}
+// Volumen de la música: desvanecido al final y más bajo mientras suena un video.
+function updateGain(t) {
+  if (!AC) return;
+  const fade = clamp((tl.total - t) / 1.8, 0, 1);
+  const duck = soundingVideo(t) ? 0.2 : 1;
+  AC.music.gain.setTargetAtTime(state.volume * fade * duck, AC.ac.currentTime, 0.06);
+}
+
+// ---------- videos dentro de la tarjeta ----------
+// live = reproduciendo/grabando (los clips corren en tiempo real);
+// si no, se busca el cuadro exacto para la posición de la vista previa.
+function syncVideos(t, live) {
+  tl.scenes.forEach((sc) => {
+    if (sc.type !== 'photo') return;
+    const ph = state.photos[sc.i];
+    if (!ph || ph.kind !== 'video') return;
+    const v = ph.img;
+    const lt = t - sc.start;
+    const vt = clamp(lt - VIDEO_DELAY, 0, ph.clip);
+    if (live && lt >= VIDEO_DELAY && lt < VIDEO_DELAY + ph.clip) {
+      if (v.paused) {
+        v.currentTime = vt;
+        v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+      } else if (Math.abs(v.currentTime - vt) > 0.35) v.currentTime = vt;
+    } else {
+      if (!v.paused) v.pause();
+      if (lt >= -0.5 && lt <= sc.dur && !v.seeking && Math.abs(v.currentTime - vt) > 0.08) v.currentTime = vt;
+    }
+  });
+}
+function pauseVideos() {
+  state.photos.forEach((ph) => { if (ph.kind === 'video') ph.img.pause(); });
 }
 
 // ---------- ocasión ----------
@@ -137,13 +226,16 @@ function applyOccasion(id) {
     emoji: o.emoji, title: o.title, message: o.messages[0], bg: o.bg, particles: o.particles,
     pattern: o.pattern, titleFont: o.titleFont, bodyFont: o.bodyFont, showDetails: !!o.event,
   });
+  if (!musicManual) state.music = MUSIC_BY_OCCASION[id] || 'fiesta';
   suggIdx = 0;
   syncInputs();
   renderOccasions();
   renderBackgrounds();
   renderParticles();
   renderSuggestions();
+  renderMusic();
   changed();
+  if (playing) restartMusic(playT);
 }
 
 function renderOccasions() {
@@ -183,10 +275,23 @@ function renderParticles() {
     `<button class="chip${state.particles === k ? ' on' : ''}" data-p="${k}">${v}</button>`).join('');
 }
 
+function renderMusic() {
+  const opts = { none: '🔇 Sin música', ...MUSIC_STYLES, file: '📁 Mi canción' };
+  $('#musicGrid').innerHTML = Object.entries(opts).map(([k, v]) =>
+    `<button class="chip${state.music === k ? ' on' : ''}" data-m="${k}" aria-pressed="${state.music === k}">${v}</button>`).join('');
+  $('#musicPick').hidden = state.music !== 'file';
+  $('#musicBox').hidden = !(state.music === 'file' && audio.src);
+}
+
 function renderPhotos() {
-  $('#photoList').innerHTML = state.photos.map((p, i) =>
-    `<li><img src="${p.thumb}" alt="Foto ${i + 1}" data-i="${i}"><span class="n">${i + 1}</span>
-      <div class="ops"><button data-act="left" data-i="${i}" aria-label="Mover antes">◀</button><button data-act="del" data-i="${i}" aria-label="Quitar foto">✕</button><button data-act="right" data-i="${i}" aria-label="Mover después">▶</button></div></li>`).join('');
+  $('#photoList').innerHTML = state.photos.map((p, i) => {
+    const isV = p.kind === 'video';
+    const extra = isV
+      ? `<span class="badge">▶ ${fmt(p.clip)}</span><button class="snd" data-act="snd" data-i="${i}" aria-pressed="${p.sound}" aria-label="${p.sound ? 'Silenciar video' : 'Incluir sonido del video'}">${p.sound ? '🔊' : '🔇'}</button>`
+      : '';
+    return `<li><img src="${p.thumb}" alt="${isV ? 'Video' : 'Foto'} ${i + 1}" data-i="${i}"><span class="n">${i + 1}</span>${extra}
+      <div class="ops"><button data-act="left" data-i="${i}" aria-label="Mover antes">◀</button><button data-act="del" data-i="${i}" aria-label="Quitar foto">✕</button><button data-act="right" data-i="${i}" aria-label="Mover después">▶</button></div></li>`;
+  }).join('');
 }
 
 const TEXT_IDS = ['title', 'emoji', 'to', 'message', 'from', 'detailsTitle', 'date', 'time', 'place', 'note'];
@@ -225,15 +330,89 @@ function loadImage(file, maxSide = 1600) {
   });
 }
 
+function loadVideo(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement('video');
+    v.muted = true;
+    v.playsInline = true;
+    v.setAttribute('playsinline', '');
+    v.preload = 'auto';
+    v.src = url;
+    $('#media').appendChild(v);
+    let done = false;
+    const fail = () => {
+      if (done) return;
+      done = true;
+      v.remove();
+      URL.revokeObjectURL(url);
+      reject(new Error('video'));
+    };
+    const timer = setTimeout(fail, 20000);
+    v.onerror = fail;
+    v.onloadedmetadata = () => {
+      if (!v.videoWidth) return fail();
+      const d = isFinite(v.duration) ? v.duration : 1;
+      v.currentTime = Math.min(0.5, d / 2);
+    };
+    v.onseeked = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      v.onseeked = null;
+      // Portada (se muestra mientras el video carga) y miniatura.
+      const k = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+      const poster = document.createElement('canvas');
+      poster.width = Math.round(v.videoWidth * k);
+      poster.height = Math.round(v.videoHeight * k);
+      poster.getContext('2d').drawImage(v, 0, 0, poster.width, poster.height);
+      const tk = 220 / Math.max(poster.width, poster.height);
+      const t = document.createElement('canvas');
+      t.width = Math.round(poster.width * tk);
+      t.height = Math.round(poster.height * tk);
+      t.getContext('2d').drawImage(poster, 0, 0, t.width, t.height);
+      const full = isFinite(v.duration) ? v.duration : MAX_CLIP;
+      const clip = clamp(full - 0.05, 0.5, MAX_CLIP);
+      v.currentTime = 0;
+      v.addEventListener('seeked', () => { dirty = true; });
+      v.addEventListener('loadeddata', () => { dirty = true; });
+      resolve({ kind: 'video', img: v, poster, thumb: t.toDataURL('image/jpeg', 0.75), clip, full, sound: false, url });
+    };
+  });
+}
+
+function removeMedia(ph) {
+  if (ph.kind !== 'video') return;
+  ph.img.pause();
+  if (ph.node) ph.node.disconnect();
+  ph.img.removeAttribute('src');
+  ph.img.load();
+  ph.img.remove();
+  URL.revokeObjectURL(ph.url);
+}
+
 async function addPhotos(files) {
-  const list = [...files].filter((f) => f.type.startsWith('image/'));
-  const room = MAX_PHOTOS - state.photos.length;
-  if (!list.length) return;
-  if (room <= 0) { toast(`Máximo ${MAX_PHOTOS} fotos`); return; }
-  if (list.length > room) toast(`Solo se agregaron ${room} foto(s); el máximo es ${MAX_PHOTOS}`);
-  for (const f of list.slice(0, room)) {
-    try { state.photos.push(await loadImage(f)); } catch { toast('No se pudo leer una de las imágenes'); }
+  const list = [...files].filter((f) => f.type.startsWith('image/') || f.type.startsWith('video/'));
+  if (!list.length) { toast('Elige archivos de imagen o de video'); return; }
+  let room = MAX_PHOTOS - state.photos.length;
+  let vRoom = MAX_VIDEOS - state.photos.filter((p) => p.kind === 'video').length;
+  if (room <= 0) { toast(`Máximo ${MAX_PHOTOS} fotos y videos en total`); return; }
+  let skipped = 0, long = 0, failed = 0;
+  for (const f of list) {
+    const isV = f.type.startsWith('video/');
+    if (room <= 0 || (isV && vRoom <= 0)) { skipped++; continue; }
+    try {
+      const item = isV ? await loadVideo(f) : await loadImage(f);
+      if (isV) { vRoom--; if (item.full > MAX_CLIP + 0.1) long++; routeVideo(item); }
+      state.photos.push(item);
+      room--;
+    } catch { failed++; }
   }
+  const msgs = [];
+  if (skipped) msgs.push(`${skipped} archivo(s) no se agregaron (máx. ${MAX_PHOTOS} en total y ${MAX_VIDEOS} videos)`);
+  if (long) msgs.push(`de los videos largos se usan los primeros ${MAX_CLIP} s`);
+  if (failed) msgs.push(`${failed} archivo(s) no se pudieron leer (formato no compatible con este navegador)`);
+  if (msgs.length) toast(msgs.join(' · '), 5000);
   renderPhotos();
   changed();
 }
@@ -245,19 +424,6 @@ function pickMime() {
     'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm',
   ];
   return types.find((t) => MediaRecorder.isTypeSupported(t)) || '';
-}
-
-let audioGraph = null;
-function getAudioGraph() {
-  if (!audioGraph) {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ac.createMediaElementSource(audio);
-    const gain = ac.createGain();
-    src.connect(gain);
-    gain.connect(ac.destination);
-    audioGraph = { ac, gain };
-  }
-  return audioGraph;
 }
 
 let cancelRec = false, lastUrl = null, lastFile = null;
@@ -284,20 +450,15 @@ async function exportVideo() {
 
   const stream = cv.captureStream(30);
   let dest = null;
-  if (audio.src) {
-    const g = getAudioGraph();
-    await g.ac.resume();
-    dest = g.ac.createMediaStreamDestination();
-    g.gain.connect(dest);
-    const now = g.ac.currentTime;
-    g.gain.gain.cancelScheduledValues(now);
-    g.gain.gain.setValueAtTime(state.volume, now);
-    g.gain.gain.setValueAtTime(state.volume, now + Math.max(0, tl.total - 1.8));
-    g.gain.gain.linearRampToValueAtTime(0, now + tl.total);
-    audio.volume = 1;
-    audio.currentTime = 0;
-    stream.addTrack(dest.stream.getAudioTracks()[0]);
-    audio.play().catch(() => {});
+  const hasAudio = (state.music === 'file' && audio.src) || MUSIC_STYLES[state.music] || state.photos.some((p) => p.kind === 'video' && p.sound);
+  pauseVideos();
+  if (ensureAudio()) {
+    await AC.ac.resume();
+    if (hasAudio) {
+      dest = AC.ac.createMediaStreamDestination();
+      AC.master.connect(dest);
+      stream.addTrack(dest.stream.getAudioTracks()[0]);
+    }
   }
 
   const rec = new MediaRecorder(stream, { ...(mime && { mimeType: mime }), videoBitsPerSecond: state.quality >= 1080 ? 10_000_000 : 6_000_000 });
@@ -305,11 +466,14 @@ async function exportVideo() {
   rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
   const stopped = new Promise((r) => { rec.onstop = r; });
   rec.start(250);
+  restartMusic(0);
   const start = performance.now();
   await new Promise((resolve) => {
     const step = () => {
       if (cancelRec) return resolve();
       const t = (performance.now() - start) / 1000;
+      syncVideos(Math.min(t, tl.total), t < tl.total);
+      updateGain(t);
       renderFrame(ctx, W, H, Math.min(t, tl.total), state, tl);
       const pct = Math.min(100, Math.round((t / tl.total) * 100));
       $('#recBar').style.width = pct + '%';
@@ -321,14 +485,11 @@ async function exportVideo() {
   });
   rec.stop();
   await stopped;
-  audio.pause();
-  if (audioGraph) {
-    audioGraph.gain.gain.cancelScheduledValues(audioGraph.ac.currentTime);
-    audioGraph.gain.gain.setValueAtTime(1, audioGraph.ac.currentTime);
-    if (dest) audioGraph.gain.disconnect(dest);
-  }
-  stream.getVideoTracks().forEach((tr) => tr.stop());
   exporting = false;
+  stopMusic();
+  pauseVideos();
+  if (dest) AC.master.disconnect(dest);
+  stream.getTracks().forEach((tr) => tr.stop());
   layoutCanvas();
 
   if (cancelRec) { dlg.close(); toast('Grabación cancelada'); return; }
@@ -425,7 +586,15 @@ function bind() {
       if (sc) seek(sc.start + 1.2);
       return;
     }
-    if (el.dataset.act === 'del') P.splice(i, 1);
+    if (el.dataset.act === 'snd') {
+      P[i].sound = !P[i].sound;
+      ensureAudio();
+      routeVideo(P[i]);
+      renderPhotos();
+      toast(P[i].sound ? '🔊 Se incluirá el sonido de este video' : '🔇 Video sin sonido');
+      return;
+    }
+    if (el.dataset.act === 'del') removeMedia(P.splice(i, 1)[0]);
     else if (el.dataset.act === 'left' && i > 0) [P[i - 1], P[i]] = [P[i], P[i - 1]];
     else if (el.dataset.act === 'right' && i < P.length - 1) [P[i + 1], P[i]] = [P[i], P[i + 1]];
     renderPhotos(); changed();
@@ -469,24 +638,43 @@ function bind() {
   $('#accentColor').addEventListener('input', (e) => { state.accentColor = e.target.value; changed(false); });
   $('#showEmoji').addEventListener('change', (e) => { state.showEmoji = e.target.checked; changed(false); });
 
+  $('#musicGrid').addEventListener('click', (e) => {
+    const b = e.target.closest('.chip');
+    if (!b) return;
+    state.music = b.dataset.m;
+    musicManual = true;
+    renderMusic();
+    ensureAudio();
+    if (state.music === 'file' && !audio.src) { $('#musicIn').click(); return; }
+    if (playing) restartMusic(playT);
+    else if (state.music !== 'none') play();
+  });
   $('#musicIn').addEventListener('change', (e) => {
     const f = e.target.files[0];
     if (!f) return;
     if (audio.src) URL.revokeObjectURL(audio.src);
     audio.src = URL.createObjectURL(f);
     $('#musicName').textContent = '🎵 ' + f.name;
-    $('#musicBox').hidden = false;
+    state.music = 'file';
+    musicManual = true;
     e.target.value = '';
-    syncAudio();
+    renderMusic();
+    ensureAudio();
+    toast('⚖️ Recuerda: usa solo música que tengas derecho a compartir', 4000);
+    if (playing) restartMusic(playT); else play();
   });
   $('#musicRemove').addEventListener('click', () => {
-    audio.pause();
+    stopMusic();
     URL.revokeObjectURL(audio.src);
     audio.removeAttribute('src');
     audio.load();
-    $('#musicBox').hidden = true;
+    state.music = MUSIC_BY_OCCASION[state.occasion] || 'fiesta';
+    renderMusic();
+    if (playing) restartMusic(playT);
   });
-  $('#volume').addEventListener('input', (e) => { state.volume = +e.target.value; audio.volume = state.volume; });
+  $('#volume').addEventListener('input', (e) => { state.volume = +e.target.value; });
+  // El audio solo puede arrancar tras una interacción del usuario.
+  ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, () => ensureAudio(), { capture: true }));
 
   $('#playBtn').addEventListener('click', () => (playing ? pause() : play()));
   $('#scrub').addEventListener('input', (e) => seek(+e.target.value));
