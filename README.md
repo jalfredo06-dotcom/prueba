@@ -22,3 +22,9 @@ node tests/trackfmt.test.js # pruebas de CSV/GPX/KML de tracks
 ```
 
 En el celular: abrir la URL → menú del navegador → *Instalar aplicación / Añadir a pantalla de inicio*.
+
+---
+
+## Otra app en este repositorio: Tarjetas Animadas
+
+En la carpeta [`tarjetas/`](tarjetas/) hay una app independiente para crear tarjetas virtuales en video (cumpleaños, invitaciones, grados, bodas…). Ver [`tarjetas/README.md`](tarjetas/README.md) para publicarla en Netlify.
