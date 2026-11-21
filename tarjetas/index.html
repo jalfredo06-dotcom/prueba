@@ -114,8 +114,27 @@
       </div>
     </details>
 
+    <details class="panel" open>
+      <summary><b>6</b> Personalizar con nombres <small>(hasta 10)</small></summary>
+      <p class="hint">Escribe un nombre por línea o sube una lista. Cada nombre aparece en la dedicatoria (por ejemplo, "Para Ana"). Si escribes <code>{nombre}</code> en el título, la dedicatoria, el mensaje o la firma, el nombre se coloca justo ahí.</p>
+      <label>Nombres<textarea id="names" rows="4" placeholder="Ana María&#10;Familia Pérez&#10;Carlos y Lucía"></textarea></label>
+      <div class="names-tools">
+        <label class="file small">📄 Subir lista (.txt o .csv)<input id="namesFile" type="file" accept=".txt,.csv,text/plain,text/csv" hidden></label>
+        <span id="namesCount" class="hint">0/10 nombres</span>
+      </div>
+      <div id="namesPreview" hidden>
+        <span class="lbl">Ver en la vista previa</span>
+        <div id="nameChips" class="chips"></div>
+      </div>
+      <div class="actions">
+        <button id="batchVideoBtn" class="btn primary" disabled>🎬 Generar videos</button>
+        <button id="batchPngBtn" class="btn" disabled>🖼️ Generar imágenes</button>
+      </div>
+      <p id="batchHint" class="hint"></p>
+    </details>
+
     <details class="panel">
-      <summary><b>6</b> Estilo del texto</summary>
+      <summary><b>7</b> Estilo del texto</summary>
       <div class="row2">
         <label>Letra del título<select id="titleFont"></select></label>
         <label>Letra del mensaje<select id="bodyFont"></select></label>
@@ -130,7 +149,7 @@
     </details>
 
     <details class="panel" open>
-      <summary><b>7</b> Música de fondo</summary>
+      <summary><b>8</b> Música de fondo</summary>
       <div id="musicGrid" class="chips"></div>
       <label class="file" id="musicPick" hidden>🎵 Elegir canción (MP3, M4A…)<input id="musicIn" type="file" accept="audio/*" hidden></label>
       <div id="musicBox" class="music" hidden>
@@ -147,7 +166,8 @@
 <dialog id="dlg">
   <div class="dlg-body">
     <div id="recView">
-      <h2>Grabando tu video…</h2>
+      <h2 id="recTitle">Grabando tu video…</h2>
+      <p id="recSub" class="rec-sub" hidden></p>
       <p class="hint">Mantén esta pestaña abierta y la pantalla encendida hasta que termine.</p>
       <div class="bar"><i id="recBar"></i></div>
       <p id="recLbl" class="hint center">0%</p>
@@ -162,6 +182,17 @@
         <a id="dlLink" class="btn primary" download>⬇️ Descargar</a>
         <button id="shareBtn" class="btn" hidden>📤 Compartir</button>
         <button id="closeBtn" class="btn">Cerrar</button>
+      </div>
+    </div>
+    <div id="batchView" hidden>
+      <h2 id="batchTitle">¡Tus tarjetas personalizadas están listas! 🎉</h2>
+      <ul id="batchList" class="batch-list"></ul>
+      <p id="batchInfo" class="hint center"></p>
+      <p class="legal-inline center">⚖️ Antes de compartir, verifica que tienes permiso para usar todas las fotos, videos y música de tus tarjetas.</p>
+      <div class="actions">
+        <button id="zipBtn" class="btn primary">⬇️ Descargar todo (.zip)</button>
+        <button id="shareAllBtn" class="btn" hidden>📤 Compartir todo</button>
+        <button id="batchClose" class="btn">Cerrar</button>
       </div>
     </div>
   </div>

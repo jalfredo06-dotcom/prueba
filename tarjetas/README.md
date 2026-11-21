@@ -7,6 +7,7 @@ App web (HTML + JS, sin compilación) para crear **tarjetas virtuales en video**
 - Hasta 12 **fotos y videos cortos** (máx. 6 videos; de cada uno se usan los primeros 10 s) con animaciones de entrada (polaroid, deslizar, zoom, giro, revelado, acercamiento), distintos marcos y un collage final. El sonido de cada video se puede activar; mientras suena, la música baja de volumen.
 - **Música de fondo**: 6 melodías generadas por la propia app (fiesta, piano romántico, campanas navideñas, épica, cajita musical, suave), sugeridas según la ocasión, o una canción propia.
 - **Vertical u horizontal** con las relaciones más usadas: 16:9 / 9:16, 4:3 / 3:4, 3:2 / 2:3, 5:4 / 4:5, 1:1 y 21:9 / 9:21, en 720p o 1080p.
+- **Invitaciones personalizadas**: escribe o sube (.txt/.csv) hasta 10 nombres y genera de una vez un video o una imagen para cada uno, con descarga individual o todo en un ZIP. El nombre va en la dedicatoria o donde escribas `{nombre}`.
 - Detalles del evento (fecha, hora, lugar, nota) y varias tipografías.
 - Exporta **video** (MP4 en Chrome/Edge/Safari recientes; WebM en Firefox) o **imagen PNG**, y permite compartir desde el celular.
 

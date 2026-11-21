@@ -1,6 +1,7 @@
 import { OCCASIONS, BACKGROUNDS, PATTERNS, PARTICLES, FRAMES, PHOTO_ANIMS, TEXT_ANIMS, FONTS, RATIOS, QUALITIES } from './data.js';
 import { buildTimeline, renderFrame, clearFitCache, VIDEO_DELAY } from './render.js';
 import { MUSIC_STYLES, MUSIC_BY_OCCASION, SynthPlayer } from './music.js';
+import { makeZip } from './zip.js';
 
 const $ = (s) => document.querySelector(s);
 const cv = $('#cv');
@@ -9,6 +10,7 @@ const audio = $('#audio');
 const MAX_PHOTOS = 12; // fotos + videos
 const MAX_VIDEOS = 6;
 const MAX_CLIP = 10; // segundos que se usan de cada video
+const MAX_NAMES = 10;
 
 const state = {
   occasion: 'cumple', emoji: '', title: '', to: '', message: '', from: '',
@@ -18,8 +20,31 @@ const state = {
   titleFont: 'pacifico', bodyFont: 'quicksand', textAuto: true, textColor: '#ffffff', accentColor: '#ffd166',
   showEmoji: true, photos: [], speed: 1, orient: 'v', ratio: '16:9', quality: 1080, volume: 0.8,
   music: 'fiesta', // 'none' | estilo generado | 'file'
+  names: [], // lista para invitaciones personalizadas
+  previewName: '', // nombre que se ve en la vista previa ('' = general)
 };
 let musicManual = false; // el usuario eligió música: no cambiarla al cambiar de ocasión
+
+// ---------- personalización por nombre ----------
+const NAME_RE = /\{\s*nombre\s*\}/gi;
+const PERSONAL_FIELDS = ['title', 'to', 'message', 'from'];
+const hasPlaceholder = (st) => PERSONAL_FIELDS.some((k) => (st[k] || '').search(NAME_RE) >= 0);
+// Copia del estado con el nombre puesto: en {nombre} si existe, o en la dedicatoria.
+function personalize(base, name) {
+  const out = { ...base };
+  if (hasPlaceholder(base)) {
+    PERSONAL_FIELDS.forEach((k) => { out[k] = (base[k] || '').replace(NAME_RE, name); });
+  } else {
+    out.to = base.to.trim() ? `${base.to.trim()} ${name}` : `Para ${name}`;
+  }
+  return out;
+}
+// Estado que se dibuja: el del nombre elegido, o el general.
+function S() {
+  let name = state.previewName;
+  if (!name && hasPlaceholder(state)) name = state.names[0] || 'Nombre';
+  return name ? personalize(state, name) : state;
+}
 
 let tl = buildTimeline(state);
 let playing = false, playT = 0, t0 = 0, dirty = true, exporting = false, suggIdx = 0;
@@ -73,7 +98,7 @@ function layoutCanvas() {
 
 function changed(rebuild = true) {
   if (rebuild) {
-    tl = buildTimeline(state);
+    tl = buildTimeline(S());
     if (playT > tl.total) playT = 0;
     $('#scrub').max = tl.total.toFixed(2);
   }
@@ -88,6 +113,13 @@ function updateInfo() {
   const nv = state.photos.filter((p) => p.kind === 'video').length;
   const np = state.photos.length - nv;
   $('#formatInfo').textContent = `${w}:${h} · ${W}×${H} px · duración ${fmt(tl.total)} · ${np} foto(s)` + (nv ? ` · ${nv} video(s)` : '');
+  const n = state.names.length;
+  $('#batchVideoBtn').disabled = $('#batchPngBtn').disabled = !n;
+  $('#batchVideoBtn').textContent = n ? `🎬 Generar ${n} video${n > 1 ? 's' : ''}` : '🎬 Generar videos';
+  $('#batchPngBtn').textContent = n ? `🖼️ Generar ${n} ${n > 1 ? 'imágenes' : 'imagen'}` : '🖼️ Generar imágenes';
+  $('#batchHint').textContent = n
+    ? `Los videos se graban uno tras otro en tiempo real: unos ${fmt(n * (tl.total + 1.5))} en total. Las imágenes salen en segundos y muestran el momento que ves en la vista previa (al inicio, la portada).`
+    : 'Agrega nombres para crear una tarjeta distinta para cada invitado.';
 }
 
 function frame() {
@@ -101,7 +133,7 @@ function frame() {
     }
     if (dirty) {
       if (!playing) syncVideos(playT, false);
-      renderFrame(ctx, cv.width, cv.height, Math.min(playT, tl.total), state, tl);
+      renderFrame(ctx, cv.width, cv.height, Math.min(playT, tl.total), S(), tl);
       $('#scrub').value = Math.min(playT, tl.total);
       $('#timeLbl').textContent = `${fmt(Math.min(playT, tl.total))} / ${fmt(tl.total)}`;
       dirty = false;
@@ -426,27 +458,51 @@ function pickMime() {
   return types.find((t) => MediaRecorder.isTypeSupported(t)) || '';
 }
 
-let cancelRec = false, lastUrl = null, lastFile = null;
-async function exportVideo() {
-  if (exporting) return;
-  if (!window.MediaRecorder || !cv.captureStream) {
+let cancelRec = false, lastUrl = null, lastFile = null, batch = [];
+
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const slug = (t) => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'invitado';
+const mb = (b) => `${(b.size / 1048576).toFixed(1)} MB`;
+function fileName(name, ext) {
+  const base = `tarjeta-${state.occasion}`;
+  return name ? `${base}-${slug(name)}.${ext}` : `${base}-${state.ratio.replace(':', 'x')}${state.orient === 'v' ? '-vertical' : ''}.${ext}`;
+}
+
+function showRec(title, sub = '') {
+  $('#recTitle').textContent = title;
+  $('#recSub').textContent = sub;
+  $('#recSub').hidden = !sub;
+  $('#recView').hidden = false;
+  $('#doneView').hidden = true;
+  $('#batchView').hidden = true;
+  setProgress(0, '0%');
+  if (!$('#dlg').open) $('#dlg').showModal();
+}
+function setProgress(frac, label) {
+  const pct = Math.min(100, Math.round(frac * 100));
+  $('#recBar').style.width = pct + '%';
+  $('#recLbl').textContent = label || `${pct}%`;
+}
+
+async function prepareExport(needRecorder) {
+  if (needRecorder && (!window.MediaRecorder || !cv.captureStream)) {
     toast('Tu navegador no permite grabar video. Prueba con Chrome, Edge, Firefox o Safari actualizados.', 5000);
-    return;
+    return false;
   }
   pause();
   await document.fonts.ready;
   clearFitCache();
+  return true;
+}
+
+// Graba la tarjeta actual (S() y tl) en tiempo real. Devuelve null si se canceló.
+async function recordVideo(onProgress) {
   const mime = pickMime();
   const { W, H } = exportSize();
-  exporting = true;
-  cancelRec = false;
   cv.width = W; cv.height = H;
-  renderFrame(ctx, W, H, 0, state, tl);
-
-  const dlg = $('#dlg');
-  $('#recView').hidden = false; $('#doneView').hidden = true;
-  $('#recBar').style.width = '0%'; $('#recLbl').textContent = '0%';
-  dlg.showModal();
+  const st = S();
+  renderFrame(ctx, W, H, 0, st, tl);
 
   const stream = cv.captureStream(30);
   let dest = null;
@@ -460,7 +516,6 @@ async function exportVideo() {
       stream.addTrack(dest.stream.getAudioTracks()[0]);
     }
   }
-
   const rec = new MediaRecorder(stream, { ...(mime && { mimeType: mime }), videoBitsPerSecond: state.quality >= 1080 ? 10_000_000 : 6_000_000 });
   const chunks = [];
   rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
@@ -474,10 +529,8 @@ async function exportVideo() {
       const t = (performance.now() - start) / 1000;
       syncVideos(Math.min(t, tl.total), t < tl.total);
       updateGain(t);
-      renderFrame(ctx, W, H, Math.min(t, tl.total), state, tl);
-      const pct = Math.min(100, Math.round((t / tl.total) * 100));
-      $('#recBar').style.width = pct + '%';
-      $('#recLbl').textContent = `${pct}% · ${fmt(Math.min(t, tl.total))} de ${fmt(tl.total)}`;
+      renderFrame(ctx, W, H, Math.min(t, tl.total), st, tl);
+      onProgress(Math.min(1, t / tl.total), t);
       if (t >= tl.total + 0.25) return resolve();
       requestAnimationFrame(step);
     };
@@ -485,46 +538,137 @@ async function exportVideo() {
   });
   rec.stop();
   await stopped;
-  exporting = false;
   stopMusic();
   pauseVideos();
   if (dest) AC.master.disconnect(dest);
   stream.getTracks().forEach((tr) => tr.stop());
-  layoutCanvas();
-
-  if (cancelRec) { dlg.close(); toast('Grabación cancelada'); return; }
+  if (cancelRec) return null;
   const type = (rec.mimeType || mime || 'video/webm').split(';')[0];
   const ext = type.includes('mp4') ? 'mp4' : 'webm';
-  const blob = new Blob(chunks, { type });
+  return { blob: new Blob(chunks, { type }), type, ext, W, H };
+}
+
+async function exportVideo() {
+  if (exporting || !(await prepareExport(true))) return;
+  exporting = true;
+  cancelRec = false;
+  showRec('Grabando tu video…', state.previewName);
+  const r = await recordVideo((f, t) => setProgress(f, `${Math.round(f * 100)}% · ${fmt(Math.min(t, tl.total))} de ${fmt(tl.total)}`));
+  exporting = false;
+  layoutCanvas();
+  if (!r) { $('#dlg').close(); toast('Grabación cancelada'); return; }
   if (lastUrl) URL.revokeObjectURL(lastUrl);
-  lastUrl = URL.createObjectURL(blob);
-  const name = `tarjeta-${state.occasion}-${state.ratio.replace(':', 'x')}${state.orient === 'v' ? '-vertical' : ''}.${ext}`;
-  lastFile = new File([blob], name, { type });
+  lastUrl = URL.createObjectURL(r.blob);
+  const name = fileName(state.previewName, r.ext);
+  lastFile = new File([r.blob], name, { type: r.type });
   $('#outVideo').src = lastUrl;
   $('#dlLink').href = lastUrl;
   $('#dlLink').download = name;
-  $('#outInfo').textContent = `${W}×${H} px · ${fmt(tl.total)} · ${(blob.size / 1048576).toFixed(1)} MB · .${ext}` +
-    (ext === 'webm' ? ' — si alguna app no acepta .webm, crea el video desde Chrome o Safari recientes para obtener .mp4.' : '');
+  $('#outInfo').textContent = `${r.W}×${r.H} px · ${fmt(tl.total)} · ${mb(r.blob)} · .${r.ext}` +
+    (r.ext === 'webm' ? ' — si alguna app no acepta .webm, crea el video desde Chrome o Safari recientes para obtener .mp4.' : '');
   $('#shareBtn').hidden = !(navigator.canShare && navigator.canShare({ files: [lastFile] }));
-  $('#recView').hidden = true; $('#doneView').hidden = false;
+  $('#recView').hidden = true;
+  $('#doneView').hidden = false;
 }
 
-async function exportPng() {
-  await document.fonts.ready;
-  clearFitCache();
+// Imagen PNG de la tarjeta actual. Si la vista previa está al inicio, usa la portada completa.
+function renderPng() {
   const { W, H } = exportSize();
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
-  // Si está al inicio, usa un instante con la portada completa.
-  const t = playT < 0.5 ? Math.min(2.6, tl.total) : Math.min(playT, tl.total);
-  renderFrame(c.getContext('2d'), W, H, t, state, tl);
-  c.toBlob((b) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(b);
-    a.download = `tarjeta-${state.occasion}.png`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  }, 'image/png');
+  const t = playT < 0.5 ? Math.min(2.6 * state.speed, tl.total) : Math.min(playT, tl.total);
+  renderFrame(c.getContext('2d'), W, H, t, S(), tl);
+  return new Promise((r) => c.toBlob(r, 'image/png'));
+}
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+async function exportPng() {
+  await prepareExport(false);
+  download(await renderPng(), fileName(state.previewName, 'png'));
+}
+
+// ---------- lote: una tarjeta por nombre ----------
+async function batchExport(kind) {
+  const names = state.names;
+  if (!names.length) { toast('Agrega al menos un nombre'); $('#names').focus(); return; }
+  if (exporting || !(await prepareExport(kind === 'video'))) return;
+  const keep = state.previewName;
+  const keepT = playT;
+  exporting = true;
+  cancelRec = false;
+  const results = [];
+  const n = names.length;
+  showRec(kind === 'video' ? `Grabando video 1 de ${n}` : `Creando imagen 1 de ${n}`, names[0]);
+  for (let i = 0; i < n && !cancelRec; i++) {
+    const name = names[i];
+    state.previewName = name;
+    tl = buildTimeline(S());
+    $('#recTitle').textContent = kind === 'video' ? `Grabando video ${i + 1} de ${n}` : `Creando imagen ${i + 1} de ${n}`;
+    $('#recSub').textContent = name;
+    $('#recSub').hidden = false;
+    if (kind === 'video') {
+      const r = await recordVideo((f) => setProgress((i + f) / n, `${Math.round(((i + f) / n) * 100)}% · ${name}`));
+      if (!r) break;
+      results.push({ name, blob: r.blob, file: fileName(name, r.ext), type: r.type });
+    } else {
+      const blob = await renderPng();
+      results.push({ name, blob, file: fileName(name, 'png'), type: 'image/png' });
+      setProgress((i + 1) / n);
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  }
+  state.previewName = keep;
+  playT = keepT;
+  exporting = false;
+  changed();
+  layoutCanvas();
+  if (!results.length) { $('#dlg').close(); toast('Cancelado'); return; }
+  showBatch(results, kind, cancelRec);
+}
+
+function showBatch(results, kind, partial) {
+  batch.forEach((b) => URL.revokeObjectURL(b.url));
+  batch = results.map((r) => ({ ...r, url: URL.createObjectURL(r.blob), f: new File([r.blob], r.file, { type: r.type }) }));
+  const canShare = (files) => !!(navigator.canShare && navigator.canShare({ files }));
+  $('#batchTitle').textContent = partial
+    ? `Se crearon ${batch.length} de ${state.names.length} antes de cancelar`
+    : `¡Tus ${batch.length} tarjetas personalizadas están listas! 🎉`;
+  $('#batchList').innerHTML = batch.map((b, i) => `<li>
+      ${kind === 'png' ? `<img class="thumb" src="${b.url}" alt="">` : '<span class="thumb" aria-hidden="true">🎬</span>'}
+      <span class="who"><b>${esc(b.name)}</b><small>${esc(b.file)} · ${mb(b.blob)}</small></span>
+      <a href="${b.url}" download="${esc(b.file)}" aria-label="Descargar ${esc(b.name)}">⬇️</a>
+      ${canShare([b.f]) ? `<button data-share="${i}" aria-label="Compartir ${esc(b.name)}">📤</button>` : ''}
+    </li>`).join('');
+  const total = batch.reduce((a, b) => a + b.blob.size, 0);
+  $('#batchInfo').textContent = `${batch.length} archivo(s) · ${(total / 1048576).toFixed(1)} MB en total`;
+  $('#shareAllBtn').hidden = !canShare(batch.map((b) => b.f));
+  $('#recView').hidden = true;
+  $('#batchView').hidden = false;
+}
+
+function setNames(list) {
+  const seen = new Set();
+  const clean = list.map((x) => x.trim().slice(0, 60)).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
+  state.names = clean.slice(0, MAX_NAMES);
+  $('#namesCount').textContent = clean.length > MAX_NAMES
+    ? `⚠️ ${clean.length} nombres: solo se usan los primeros ${MAX_NAMES}`
+    : `${state.names.length}/${MAX_NAMES} nombres`;
+  if (state.previewName && !state.names.includes(state.previewName)) state.previewName = '';
+  renderNameChips();
+  changed();
+}
+function renderNameChips() {
+  $('#namesPreview').hidden = !state.names.length;
+  const chip = (val, label) => `<button class="chip name${state.previewName === val ? ' on' : ''}" data-name="${esc(val)}" aria-pressed="${state.previewName === val}">${label}</button>`;
+  $('#nameChips').innerHTML = chip('', 'General') + state.names.map((n) => chip(n, '👤 ' + esc(n))).join('');
 }
 
 // ---------- eventos ----------
@@ -681,6 +825,50 @@ function bind() {
   $('#videoBtn').addEventListener('click', exportVideo);
   $('#pngBtn').addEventListener('click', exportPng);
   $('#cancelBtn').addEventListener('click', () => { cancelRec = true; });
+  $('#batchVideoBtn').addEventListener('click', () => batchExport('video'));
+  $('#batchPngBtn').addEventListener('click', () => batchExport('png'));
+  $('#names').addEventListener('input', (e) => setNames(e.target.value.split(/\r?\n/)));
+  $('#namesFile').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    const text = await f.text();
+    const isCsv = /\.csv$/i.test(f.name) || /[;,\t]/.test(text);
+    let rows = text.split(/\r?\n/).map((l) => (isCsv ? l.split(/[;,\t]/)[0] : l).replace(/^\s*["']|["']\s*$/g, '').trim()).filter(Boolean);
+    if (rows.length && /^(nombres?|names?|invitados?)$/i.test(rows[0])) rows = rows.slice(1);
+    if (!rows.length) { toast('El archivo no tiene nombres'); return; }
+    $('#names').value = rows.join('\n');
+    setNames(rows);
+    toast(`${state.names.length} nombre(s) cargado(s)`);
+  });
+  $('#nameChips').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-name]');
+    if (!b) return;
+    state.previewName = b.dataset.name;
+    renderNameChips();
+    changed();
+    if (!playing) seek(Math.min(2.6 * state.speed, tl.total));
+  });
+  $('#batchList').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-share]');
+    if (!b) return;
+    const it = batch[+b.dataset.share];
+    try { await navigator.share({ files: [it.f], title: state.title }); } catch { /* cancelado */ }
+  });
+  $('#shareAllBtn').addEventListener('click', async () => {
+    try { await navigator.share({ files: batch.map((b) => b.f), title: state.title }); } catch { /* cancelado */ }
+  });
+  $('#zipBtn').addEventListener('click', async () => {
+    const btn = $('#zipBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Preparando…';
+    try {
+      download(await makeZip(batch.map((b) => ({ name: b.file, blob: b.blob }))), `tarjetas-${state.occasion}.zip`);
+    } catch { toast('No se pudo crear el ZIP; descarga los archivos uno por uno'); }
+    btn.disabled = false;
+    btn.textContent = '⬇️ Descargar todo (.zip)';
+  });
+  $('#batchClose').addEventListener('click', () => $('#dlg').close());
   $('#closeBtn').addEventListener('click', () => { $('#outVideo').pause(); $('#dlg').close(); });
   $('#dlg').addEventListener('cancel', (e) => { if (exporting) e.preventDefault(); });
   $('#shareBtn').addEventListener('click', async () => {
